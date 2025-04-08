@@ -1,0 +1,166 @@
+{
+    "JOIN_REQUEST": {
+        "text": [
+            "🔔 {{user}} đã yêu cầu tham gia nhóm '{{group}}' lúc {{time}}.",
+            "📝 Có yêu cầu tham gia mới từ {{user}} vào nhóm '{{group}}' lúc {{time}}."
+        ],
+        "attachments": {}
+    },
+    "JOIN": {
+        "text": [
+            "🎉 {{user}} đã tham gia nhóm '{{group}}' lúc {{time}}!",
+            "🧡 Nhiệt liệt chào đón {{user}} đến với {{group}} nha!",
+            "🔥 Boom! {{user}} đã vào hội anh em tại {{group}}!"
+        ],
+        "attachments": {
+            "image": [
+                "https://link.com/hello1.jpg",
+                "https://link.com/hello2.jpg"
+            ],
+            "video": [
+                "https://link.com/welcome.mp4"
+            ]
+        }
+    },
+    "LEAVE": {
+        "text": [
+            "👋 {{user}} đã rời khỏi nhóm '{{group}}' lúc {{time}}.",
+            "🫡 Tạm biệt {{user}}! Hẹn gặp lại ở {{group}} nhé."
+        ],
+        "attachments": {}
+    },
+    "REMOVE_MEMBER": {
+        "text": [
+            "⛔ {{user}} đã bị xóa khỏi nhóm '{{group}}' bởi quản trị viên lúc {{time}}.",
+            "🚮 {{user}} đã bị quản trị viên xóa khỏi nhóm '{{group}}' lúc {{time}}."
+        ],
+        "attachments": {}
+    },
+    "BLOCK_MEMBER": {
+        "text": [
+            "🚫 {{user}} đã bị cấm khỏi nhóm '{{group}}' lúc {{time}}.",
+            "🔒 {{user}} đã bị chặn khỏi nhóm '{{group}}' lúc {{time}}."
+        ],
+        "attachments": {}
+    },
+    "UPDATE_SETTING": {
+        "text": [
+            "⚙️ Cài đặt nhóm '{{group}}' đã được cập nhật lúc {{time}}.",
+            "🛠️ Cài đặt mới đã được áp dụng cho nhóm '{{group}}' lúc {{time}}."
+        ],
+        "attachments": {}
+    },
+    "UPDATE": {
+        "text": [
+            "📝 Nhóm '{{group}}' vừa được cập nhật lúc {{time}}.",
+            "🔄 Thông tin nhóm '{{group}}' đã được cập nhật lúc {{time}}."
+        ],
+        "attachments": {}
+    },
+    "NEW_LINK": {
+        "text": [
+            "🔗 Link mới đã được tạo cho nhóm '{{group}}' lúc {{time}}.",
+            "🌐 Link mời mới cho nhóm '{{group}}' đã được tạo lúc {{time}}."
+        ],
+        "attachments": {}
+    },
+    "ADD_ADMIN": {
+        "text": [
+            "👑 {{user}} đã được bổ nhiệm làm quản trị viên của nhóm '{{group}}' lúc {{time}}.",
+            "⭐ {{user}} vừa trở thành quản trị viên mới của nhóm '{{group}}' lúc {{time}}."
+        ],
+        "attachments": {}
+    },
+    "REMOVE_ADMIN": {
+        "text": [
+            "⬇️ {{user}} đã bị gỡ quyền quản trị viên khỏi nhóm '{{group}}' lúc {{time}}.",
+            "🔽 {{user}} không còn là quản trị viên của nhóm '{{group}}' từ lúc {{time}}."
+        ],
+        "attachments": {}
+    },
+
+    "NEW_PIN_TOPIC": {
+        "text": [
+            "📌 Chủ đề mới đã được ghim trong nhóm '{{group}}' lúc {{time}}.",
+            "📍 Một chủ đề vừa được ghim trong nhóm '{{group}}' lúc {{time}}."
+        ],
+        "attachments": {}
+    },
+    "UPDATE_PIN_TOPIC": {
+        "text": [
+            "🔄 Chủ đề ghim đã được cập nhật trong nhóm '{{group}}' lúc {{time}}.",
+            "📝 Thông tin chủ đề ghim đã được thay đổi trong nhóm '{{group}}' lúc {{time}}."
+        ],
+        "attachments": {}
+    },
+    "REORDER_PIN_TOPIC": {
+        "text": [
+            "🔃 Thứ tự các chủ đề ghim đã được sắp xếp lại trong nhóm '{{group}}' lúc {{time}}.",
+            "📊 Các chủ đề ghim đã được sắp xếp theo thứ tự mới trong nhóm '{{group}}' lúc {{time}}."
+        ],
+        "attachments": {}
+    },
+    "UPDATE_BOARD": {
+        "text": [
+            "📋 Bảng tin đã được cập nhật trong nhóm '{{group}}' lúc {{time}}.",
+            "📢 Bảng tin nhóm '{{group}}' vừa được cập nhật lúc {{time}}."
+        ],
+        "attachments": {}
+    },
+    "REMOVE_BOARD": {
+        "text": [
+            "🗑️ Bảng tin đã bị xóa khỏi nhóm '{{group}}' lúc {{time}}.",
+            "❌ Bảng tin trong nhóm '{{group}}' đã bị gỡ bỏ lúc {{time}}."
+        ],
+        "attachments": {}
+    },
+    "UPDATE_TOPIC": {
+        "text": [
+            "📄 Chủ đề đã được cập nhật trong nhóm '{{group}}' lúc {{time}}.",
+            "✏️ Thông tin chủ đề trong nhóm '{{group}}' vừa được thay đổi lúc {{time}}."
+        ],
+        "attachments": {}
+    },
+    "UNPIN_TOPIC": {
+        "text": [
+            "📎 Một chủ đề đã được bỏ ghim trong nhóm '{{group}}' lúc {{time}}.",
+            "🔓 Chủ đề không còn được ghim trong nhóm '{{group}}' từ lúc {{time}}."
+        ],
+        "attachments": {}
+    },
+    "REMOVE_TOPIC": {
+        "text": [
+            "🗑️ Chủ đề đã bị xóa khỏi nhóm '{{group}}' lúc {{time}}.",
+            "❌ Một chủ đề trong nhóm '{{group}}' đã bị gỡ bỏ lúc {{time}}."
+        ],
+        "attachments": {}
+    },
+    "ACCEPT_REMIND": {
+        "text": [
+            "✅ {{user}} đã chấp nhận lời nhắc trong nhóm '{{group}}' lúc {{time}}.",
+            "👍 {{user}} đồng ý với lời nhắc trong nhóm '{{group}}' lúc {{time}}."
+        ],
+        "attachments": {}
+    },
+    "REJECT_REMIND": {
+        "text": [
+            "❎ {{user}} đã từ chối lời nhắc trong nhóm '{{group}}' lúc {{time}}.",
+            "👎 {{user}} không đồng ý với lời nhắc trong nhóm '{{group}}' lúc {{time}}."
+        ],
+        "attachments": {}
+    },
+    "REMIND_TOPIC": {
+        "text": [
+            "⏰ Có lời nhắc mới về chủ đề trong nhóm '{{group}}' lúc {{time}}.",
+            "🔔 Nhắc nhở về chủ đề đã được tạo trong nhóm '{{group}}' lúc {{time}}."
+        ],
+        "attachments": {}
+    },
+    "UNKNOWN": {
+        "text": [
+            "[{{type}}] {{user}} vừa có hành động trong nhóm {{group}} lúc {{time}}.",
+            "[{{type}}] Có hoạt động không xác định trong nhóm {{group}} lúc {{time}}."
+        ],
+        "attachments": {}
+    }
+}

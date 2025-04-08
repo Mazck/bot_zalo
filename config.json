@@ -1,0 +1,14 @@
+{
+    "prefix": "/",
+    "name": "ZaloBot",
+    "version": "1.0.0",
+    "admins": [],
+    "imei": "d7cf9d66-3cd9-466f-ac3d-70f5917cac27-3fa31b52dd6ebc517e5492d43d77e61c",
+    "userAgent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+    "sendErrorMessages": true,
+    "notifyCommandNotFound": true,
+    "dialect": "mysql",
+    "host": "localhost",
+    "notifyLevelUp": true,
+    "notifyGroupLevelUp": true
+}
