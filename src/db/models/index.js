@@ -954,7 +954,6 @@ class Database {
             this.logger.info('🔄 Bắt đầu đồng bộ hóa dữ liệu từ Zalo API...');
             // Get all groups
             const groups = await api.getAllGroups();
-            console.log(groups)
             if (groups && groups.gridInfoMap) {
                 const groupIds = Object.keys(groups.gridInfoMap);
 

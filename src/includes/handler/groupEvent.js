@@ -1,207 +1,85 @@
-import { GroupEventType } from "zca-js";
+import { GroupEventType, ThreadType, TextStyle, Urgency } from "zca-js";
 import moment from "moment-timezone";
 import path from "path";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
 import fs from "fs-extra";
 import { defaultLogger } from "../../utils/logger.js";
+import axios from "axios";
+import crypto from "crypto";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Configuration path for event templates
-const configPath = path.join(__dirname, "../../config/groupEventTemplates.json");
+// Configuration paths
+const CONFIG_DIR = path.join(__dirname, "./data/config");
+const TEMPLATE_CONFIG_PATH = path.join(CONFIG_DIR, "./groupEventTemplates.json");
+const MEDIA_STORAGE_PATH = path.join(__dirname, "./data/storage/media");
+const DEFAULT_MEDIA_PATH = path.join(__dirname, "./data/assets/default");
 
-// Default templates in case config file doesn't exist
-const defaultTemplates = {
-    // Existing templates
-    "JOIN_REQUEST": {
-        "text": [
-            "🔔 {{user}} đã yêu cầu tham gia nhóm '{{group}}' lúc {{time}}.",
-            "📝 Có yêu cầu tham gia mới từ {{user}} vào nhóm '{{group}}' lúc {{time}}."
-        ],
-        "attachments": {}
-    },
-    "JOIN": {
-        "text": [
-            "🎉 {{user}} đã tham gia nhóm '{{group}}' lúc {{time}}!",
-            "🧡 Nhiệt liệt chào đón {{user}} đến với {{group}} nha!",
-            "🔥 Boom! {{user}} đã vào hội anh em tại {{group}}!"
-        ],
-        "attachments": {
-            "image": [
-                "https://link.com/hello1.jpg",
-                "https://link.com/hello2.jpg"
-            ],
-            "video": [
-                "https://link.com/welcome.mp4"
-            ]
-        }
-    },
-    "LEAVE": {
-        "text": [
-            "👋 {{user}} đã rời khỏi nhóm '{{group}}' lúc {{time}}.",
-            "🫡 Tạm biệt {{user}}! Hẹn gặp lại ở {{group}} nhé."
-        ],
-        "attachments": {}
-    },
-    "REMOVE_MEMBER": {
-        "text": [
-            "⛔ {{user}} đã bị xóa khỏi nhóm '{{group}}' bởi quản trị viên lúc {{time}}.",
-            "🚮 {{user}} đã bị quản trị viên xóa khỏi nhóm '{{group}}' lúc {{time}}."
-        ],
-        "attachments": {}
-    },
-    "BLOCK_MEMBER": {
-        "text": [
-            "🚫 {{user}} đã bị cấm khỏi nhóm '{{group}}' lúc {{time}}.",
-            "🔒 {{user}} đã bị chặn khỏi nhóm '{{group}}' lúc {{time}}."
-        ],
-        "attachments": {}
-    },
-    "UPDATE_SETTING": {
-        "text": [
-            "⚙️ Cài đặt nhóm '{{group}}' đã được cập nhật lúc {{time}}.",
-            "🛠️ Cài đặt mới đã được áp dụng cho nhóm '{{group}}' lúc {{time}}."
-        ],
-        "attachments": {}
-    },
-    "UPDATE": {
-        "text": [
-            "📝 Nhóm '{{group}}' vừa được cập nhật lúc {{time}}.",
-            "🔄 Thông tin nhóm '{{group}}' đã được cập nhật lúc {{time}}."
-        ],
-        "attachments": {}
-    },
-    "NEW_LINK": {
-        "text": [
-            "🔗 Link mới đã được tạo cho nhóm '{{group}}' lúc {{time}}.",
-            "🌐 Link mời mới cho nhóm '{{group}}' đã được tạo lúc {{time}}."
-        ],
-        "attachments": {}
-    },
-    "ADD_ADMIN": {
-        "text": [
-            "👑 {{user}} đã được bổ nhiệm làm quản trị viên của nhóm '{{group}}' lúc {{time}}.",
-            "⭐ {{user}} vừa trở thành quản trị viên mới của nhóm '{{group}}' lúc {{time}}."
-        ],
-        "attachments": {}
-    },
-    "REMOVE_ADMIN": {
-        "text": [
-            "⬇️ {{user}} đã bị gỡ quyền quản trị viên khỏi nhóm '{{group}}' lúc {{time}}.",
-            "🔽 {{user}} không còn là quản trị viên của nhóm '{{group}}' từ lúc {{time}}."
-        ],
-        "attachments": {}
-    },
-
-    // New templates for additional event types
-    "NEW_PIN_TOPIC": {
-        "text": [
-            "📌 Chủ đề mới đã được ghim trong nhóm '{{group}}' lúc {{time}}.",
-            "📍 Một chủ đề vừa được ghim trong nhóm '{{group}}' lúc {{time}}."
-        ],
-        "attachments": {}
-    },
-    "UPDATE_PIN_TOPIC": {
-        "text": [
-            "🔄 Chủ đề ghim đã được cập nhật trong nhóm '{{group}}' lúc {{time}}.",
-            "📝 Thông tin chủ đề ghim đã được thay đổi trong nhóm '{{group}}' lúc {{time}}."
-        ],
-        "attachments": {}
-    },
-    "REORDER_PIN_TOPIC": {
-        "text": [
-            "🔃 Thứ tự các chủ đề ghim đã được sắp xếp lại trong nhóm '{{group}}' lúc {{time}}.",
-            "📊 Các chủ đề ghim đã được sắp xếp theo thứ tự mới trong nhóm '{{group}}' lúc {{time}}."
-        ],
-        "attachments": {}
-    },
-    "UPDATE_BOARD": {
-        "text": [
-            "📋 Bảng tin đã được cập nhật trong nhóm '{{group}}' lúc {{time}}.",
-            "📢 Bảng tin nhóm '{{group}}' vừa được cập nhật lúc {{time}}."
-        ],
-        "attachments": {}
-    },
-    "REMOVE_BOARD": {
-        "text": [
-            "🗑️ Bảng tin đã bị xóa khỏi nhóm '{{group}}' lúc {{time}}.",
-            "❌ Bảng tin trong nhóm '{{group}}' đã bị gỡ bỏ lúc {{time}}."
-        ],
-        "attachments": {}
-    },
-    "UPDATE_TOPIC": {
-        "text": [
-            "📄 Chủ đề đã được cập nhật trong nhóm '{{group}}' lúc {{time}}.",
-            "✏️ Thông tin chủ đề trong nhóm '{{group}}' vừa được thay đổi lúc {{time}}."
-        ],
-        "attachments": {}
-    },
-    "UNPIN_TOPIC": {
-        "text": [
-            "📎 Một chủ đề đã được bỏ ghim trong nhóm '{{group}}' lúc {{time}}.",
-            "🔓 Chủ đề không còn được ghim trong nhóm '{{group}}' từ lúc {{time}}."
-        ],
-        "attachments": {}
-    },
-    "REMOVE_TOPIC": {
-        "text": [
-            "🗑️ Chủ đề đã bị xóa khỏi nhóm '{{group}}' lúc {{time}}.",
-            "❌ Một chủ đề trong nhóm '{{group}}' đã bị gỡ bỏ lúc {{time}}."
-        ],
-        "attachments": {}
-    },
-    "ACCEPT_REMIND": {
-        "text": [
-            "✅ {{user}} đã chấp nhận lời nhắc trong nhóm '{{group}}' lúc {{time}}.",
-            "👍 {{user}} đồng ý với lời nhắc trong nhóm '{{group}}' lúc {{time}}."
-        ],
-        "attachments": {}
-    },
-    "REJECT_REMIND": {
-        "text": [
-            "❎ {{user}} đã từ chối lời nhắc trong nhóm '{{group}}' lúc {{time}}.",
-            "👎 {{user}} không đồng ý với lời nhắc trong nhóm '{{group}}' lúc {{time}}."
-        ],
-        "attachments": {}
-    },
-    "REMIND_TOPIC": {
-        "text": [
-            "⏰ Có lời nhắc mới về chủ đề trong nhóm '{{group}}' lúc {{time}}.",
-            "🔔 Nhắc nhở về chủ đề đã được tạo trong nhóm '{{group}}' lúc {{time}}."
-        ],
-        "attachments": {}
-    },
-    "UNKNOWN": {
-        "text": [
-            "[{{type}}] {{user}} vừa có hành động trong nhóm {{group}} lúc {{time}}.",
-            "[{{type}}] Có hoạt động không xác định trong nhóm {{group}} lúc {{time}}."
-        ],
-        "attachments": {}
-    }
+// Default images that are included with the package
+const DEFAULT_IMAGES = {
+    welcome: "welcome.jpg",
+    goodbye: "goodbye.jpg",
+    notification: "notification.jpg"
 };
 
+// Valid media file extensions
+const VALID_MEDIA_EXTENSIONS = [
+    '.jpg', '.jpeg', '.png', '.gif', '.webp', // Images
+    '.mp4', '.mov', '.webm' // Videos
+];
+
+/**
+ * Load group event templates from config file
+ * @returns {Object} Event templates
+ */
 /**
  * Load group event templates from config file
  * @returns {Object} Event templates
  */
 function loadEventTemplates() {
     try {
-        if (fs.existsSync(configPath)) {
-            const templates = fs.readJsonSync(configPath);
-            return templates;
+        if (fs.existsSync(TEMPLATE_CONFIG_PATH)) {
+            return fs.readJsonSync(TEMPLATE_CONFIG_PATH);
         } else {
-            // Create default config if doesn't exist
-            fs.ensureDirSync(path.dirname(configPath));
-            fs.writeJsonSync(configPath, defaultTemplates, { spaces: 2 });
-            return defaultTemplates;
+            // Skip default template creation, assume external JSON will be provided
+            defaultLogger.warn("Template file not found. External JSON will be needed.");
+            return {}; // Return empty object instead of creating default templates
         }
     } catch (error) {
-        console.error("Error loading group event templates:", error);
-        return defaultTemplates;
+        defaultLogger.error("Error loading group event templates:", error);
+        return {}; // Return empty object
     }
 }
+
+/**
+ * Check if media is already downloaded and available
+ * @param {string} url URL of the media
+ * @returns {string|null} Path to the media file if exists, null otherwise
+ */
+function isMediaDownloaded(url) {
+    // Generate hash of URL for comparison
+    const urlHash = crypto.createHash('md5').update(url).digest('hex');
+
+    try {
+        if (!fs.existsSync(MEDIA_STORAGE_PATH)) {
+            return null;
+        }
+
+        const files = fs.readdirSync(MEDIA_STORAGE_PATH);
+        for (const file of files) {
+            if (file.includes(urlHash) && isValidMediaFile(path.join(MEDIA_STORAGE_PATH, file))) {
+                return path.join(MEDIA_STORAGE_PATH, file);
+            }
+        }
+    } catch (error) {
+        defaultLogger.error(`Error checking downloaded media: ${error.message}`);
+    }
+
+    return null;
+}
+
 
 /**
  * Get event type name from enum value
@@ -209,7 +87,6 @@ function loadEventTemplates() {
  * @returns {string} The event type name
  */
 function getEventTypeName(eventTypeValue) {
-    // Find the enum key by value
     const eventTypeKey = Object.keys(GroupEventType).find(
         key => GroupEventType[key] === eventTypeValue
     );
@@ -223,11 +100,15 @@ function getEventTypeName(eventTypeValue) {
  * @returns {string} Formatted message
  */
 function formatMessage(template, data) {
+    if (!template) return "";
+
     const time = moment().format("HH:mm:ss DD/MM/YYYY");
 
-    // Get user info
+    // Get user info - improved for multiple users
     let userName = "Người dùng";
-    if (data.userId) {
+    if (data.userNames && data.userNames.length > 0) {
+        userName = data.userNames.join(", ");
+    } else if (data.userId) {
         userName = data.userName || `Người dùng (${data.userId})`;
     }
 
@@ -248,7 +129,8 @@ function formatMessage(template, data) {
         .replace(/{{user}}/g, userName)
         .replace(/{{group}}/g, groupName)
         .replace(/{{time}}/g, time)
-        .replace(/{{type}}/g, eventType || "UNKNOWN");
+        .replace(/{{type}}/g, eventType || "UNKNOWN")
+        .replace(/{{date}}/g, moment().format("DD/MM/YYYY"));
 }
 
 /**
@@ -257,6 +139,8 @@ function formatMessage(template, data) {
  * @returns {string} Selected template
  */
 function getRandomTemplate(templates) {
+    if (!templates) return "";
+
     if (Array.isArray(templates)) {
         const randomIndex = Math.floor(Math.random() * templates.length);
         return templates[randomIndex];
@@ -265,16 +149,284 @@ function getRandomTemplate(templates) {
 }
 
 /**
- * Process group event and prepare message
- * @param {Object} data Event data
- * @param {Object} api Zalo API instance
- * @returns {Object} Message data
+ * Generate a unique filename for downloaded media
+ * @param {string} url The URL or base64 data
+ * @param {string} prefix File prefix
+ * @returns {string} Unique filename with extension
  */
+function generateUniqueFilename(url, prefix = 'media') {
+    const hash = crypto.createHash('md5').update(url).digest('hex');
+    const timestamp = Date.now();
+    let extension = '.jpg'; // Default extension
+
+    // Try to extract extension from URL
+    if (url.startsWith('http')) {
+        const urlParts = url.split('?')[0].split('.');
+        if (urlParts.length > 1) {
+            const ext = urlParts[urlParts.length - 1].toLowerCase();
+            if (VALID_MEDIA_EXTENSIONS.includes(`.${ext}`)) {
+                extension = `.${ext}`;
+            }
+        }
+    } else if (url.startsWith('data:')) {
+        // Extract MIME type from base64 data
+        const mimeMatch = url.match(/data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+);base64,/);
+        if (mimeMatch) {
+            const mime = mimeMatch[1].toLowerCase();
+            if (mime === 'image/jpeg' || mime === 'image/jpg') extension = '.jpg';
+            else if (mime === 'image/png') extension = '.png';
+            else if (mime === 'image/gif') extension = '.gif';
+            else if (mime === 'image/webp') extension = '.webp';
+            else if (mime === 'video/mp4') extension = '.mp4';
+            else if (mime === 'video/quicktime') extension = '.mov';
+        }
+    }
+
+    return `${prefix}_${timestamp}_${hash}${extension}`;
+}
+
+/**
+ * Check if a file exists and is a valid media file
+ * @param {string} filePath Path to file
+ * @returns {boolean} True if file exists and is valid
+ */
+function isValidMediaFile(filePath) {
+    if (!filePath || !fs.existsSync(filePath)) {
+        return false;
+    }
+
+    try {
+        // Check if file is accessible and has content
+        const stats = fs.statSync(filePath);
+        if (!stats.isFile() || stats.size === 0) {
+            return false;
+        }
+
+        // Check file extension
+        const ext = path.extname(filePath).toLowerCase();
+        return VALID_MEDIA_EXTENSIONS.includes(ext);
+    } catch (error) {
+        defaultLogger.error(`Error validating media file ${filePath}:`, error);
+        return false;
+    }
+}
+
+/**
+ * Find existing downloaded file by URL hash
+ * @param {string} source URL or base64 content
+ * @returns {string|null} Path to existing file or null if not found
+ */
+function findExistingDownload(source) {
+    try {
+        if (!fs.existsSync(MEDIA_STORAGE_PATH)) {
+            return null;
+        }
+
+        // Create a hash of the source URL/content
+        const sourceHash = crypto.createHash('md5').update(source).digest('hex');
+        const existingFiles = fs.readdirSync(MEDIA_STORAGE_PATH);
+
+        // Look for file with matching hash in filename
+        for (const file of existingFiles) {
+            if (file.includes(sourceHash) && isValidMediaFile(path.join(MEDIA_STORAGE_PATH, file))) {
+                defaultLogger.info(`Found existing media file for ${source.substring(0, 50)}...`);
+                return path.join(MEDIA_STORAGE_PATH, file);
+            }
+        }
+
+        return null;
+    } catch (error) {
+        defaultLogger.error(`Error finding existing download: ${error.message}`);
+        return null;
+    }
+}
+
+/**
+ * Process and save media from URL, base64, or local file
+ * @param {string} source URL, base64 data, or file path
+ * @returns {Promise<string|null>} Path to the processed media file or null on failure
+ */
+async function processMedia(source) {
+    if (!source) return null;
+
+    try {
+        // Ensure media storage directory exists
+        fs.ensureDirSync(MEDIA_STORAGE_PATH);
+        fs.ensureDirSync(DEFAULT_MEDIA_PATH);
+
+        // Handle default media references
+        if (source.startsWith('default:')) {
+            const defaultType = source.split(':')[1];
+            const defaultFile = DEFAULT_IMAGES[defaultType];
+
+            if (defaultFile) {
+                const defaultPath = path.join(DEFAULT_MEDIA_PATH, defaultFile);
+
+                // Check if default file exists, if not create a placeholder
+                if (!isValidMediaFile(defaultPath)) {
+                    defaultLogger.warn(`Default media file not found or invalid: ${defaultPath}. Creating placeholder.`);
+                    await createPlaceholderImage(defaultPath, defaultType);
+                }
+
+                return defaultPath;
+            }
+
+            defaultLogger.warn(`Default media type not recognized: ${defaultType}`);
+            return null;
+        }
+
+        // Handle URLs
+        if (source.startsWith('http://') || source.startsWith('https://')) {
+            // First check if we already have this file downloaded
+            const existingFile = isMediaDownloaded(source);
+            if (existingFile) {
+                defaultLogger.info(`Using previously downloaded media file for ${source.substring(0, 50)}...`);
+                return existingFile;
+            }
+
+            // Generate filename based on URL
+            const filename = generateUniqueFilename(source, 'downloaded');
+            const filePath = path.join(MEDIA_STORAGE_PATH, filename);
+
+            // Download if not found
+            try {
+                defaultLogger.info(`Downloading media from ${source.substring(0, 50)}...`);
+                const response = await axios({
+                    method: 'GET',
+                    url: source,
+                    responseType: 'stream',
+                    timeout: 5000
+                });
+
+                // Only accept 200 responses
+                if (response.status !== 200) {
+                    throw new Error(`HTTP status ${response.status}`);
+                }
+
+                const writer = fs.createWriteStream(filePath);
+                response.data.pipe(writer);
+
+                return new Promise((resolve, reject) => {
+                    writer.on('finish', () => {
+                        // Validate the downloaded file
+                        if (isValidMediaFile(filePath)) {
+                            defaultLogger.info(`Successfully downloaded media from ${source.substring(0, 50)}...`);
+                            resolve(filePath);
+                        } else {
+                            fs.unlinkSync(filePath);
+                            defaultLogger.warn(`Downloaded file is not valid media: ${source.substring(0, 50)}...`);
+                            resolve(path.join(DEFAULT_MEDIA_PATH, DEFAULT_IMAGES.notification));
+                        }
+                    });
+                    writer.on('error', err => {
+                        defaultLogger.error(`Error writing downloaded file: ${err.message}`);
+                        reject(err);
+                    });
+                });
+            } catch (error) {
+                defaultLogger.error(`Error downloading media from ${source.substring(0, 50)}...: ${error.message}`);
+                return path.join(DEFAULT_MEDIA_PATH, DEFAULT_IMAGES.notification);
+            }
+        }
+        // Handle base64 data
+        else if (source.startsWith('data:')) {
+            // Check for existing file first
+            const existingFile = findExistingDownload(source.substring(0, 100));
+            if (existingFile) {
+                return existingFile;
+            }
+
+            // Generate new file if not found
+            const filename = generateUniqueFilename(source, 'decoded');
+            const filePath = path.join(MEDIA_STORAGE_PATH, filename);
+
+            // Strip the data URL prefix and decode
+            const base64Data = source.split(',')[1];
+            if (!base64Data) {
+                throw new Error("Invalid base64 data");
+            }
+
+            fs.writeFileSync(filePath, Buffer.from(base64Data, 'base64'));
+
+            // Validate the decoded file
+            if (!isValidMediaFile(filePath)) {
+                fs.unlinkSync(filePath);
+                defaultLogger.warn("Decoded base64 is not valid media");
+                return path.join(DEFAULT_MEDIA_PATH, DEFAULT_IMAGES.notification);
+            }
+
+            return filePath;
+        }
+        // Handle local file paths
+        else {
+            // Check if it's a valid local file
+            if (isValidMediaFile(source)) {
+                return source;
+            }
+
+            // Check if it's in the media folder
+            const possiblePath = path.join(MEDIA_STORAGE_PATH, source);
+            if (isValidMediaFile(possiblePath)) {
+                return possiblePath;
+            }
+
+            defaultLogger.warn(`Local file not found or invalid: ${source}`);
+            return path.join(DEFAULT_MEDIA_PATH, DEFAULT_IMAGES.notification);
+        }
+    } catch (error) {
+        defaultLogger.error(`Error processing media: ${error.message}`);
+        return null;
+    }
+}
+
+/**
+ * Create a placeholder image when default images are missing
+ * @param {string} filePath Path to save the placeholder
+ * @param {string} type Type of placeholder (welcome, goodbye, etc)
+ * @returns {Promise<void>}
+ */
+async function createPlaceholderImage(filePath, type) {
+    try {
+        // Use a public placeholder image service 
+        const response = await axios({
+            method: 'GET',
+            url: `https://via.placeholder.com/800x600/cccccc/333333?text=${type.toUpperCase()}`,
+            responseType: 'stream',
+            timeout: 5000
+        });
+
+        const writer = fs.createWriteStream(filePath);
+        response.data.pipe(writer);
+
+        return new Promise((resolve, reject) => {
+            writer.on('finish', () => {
+                defaultLogger.info(`Created placeholder image for ${type}`);
+                resolve();
+            });
+            writer.on('error', reject);
+        });
+    } catch (error) {
+        defaultLogger.error(`Failed to create placeholder image: ${error.message}`);
+
+        // As a last resort, create a simple colored JPEG
+        try {
+            // Create a very simple 200x200 colored JPEG (all blue)
+            const buffer = Buffer.alloc(200 * 200 * 3);
+            buffer.fill(0x33); // Fill with blue color
+
+            fs.writeFileSync(filePath, buffer);
+            defaultLogger.info(`Created basic placeholder for ${type}`);
+        } catch (err) {
+            defaultLogger.error(`Failed to create basic placeholder: ${err.message}`);
+        }
+    }
+}
+
 /**
  * Process group event and prepare message
  * @param {Object} data Event data
  * @param {Object} api Zalo API instance
- * @returns {Object} Message data
+ * @returns {Promise<Object>} Message data
  */
 async function processGroupEvent(data, api) {
     const templates = loadEventTemplates();
@@ -288,10 +440,16 @@ async function processGroupEvent(data, api) {
     eventType = eventType || "UNKNOWN";
 
     // Find appropriate template for event type
-    const template = templates[eventType] || templates["UNKNOWN"];
+    const template = templates[eventType] || templates["UNKNOWN"] || null;
 
     if (!template) {
-        return null;
+        // Fallback message if no template is found
+        return {
+            text: `[${eventType}] Đã nhận sự kiện nhóm lúc ${moment().format("HH:mm:ss DD/MM/YYYY")}`,
+            attachments: null,
+            eventType: eventType,
+            groupId: data.data?.groupId
+        };
     }
 
     // Prepare event data with additional info if available
@@ -299,21 +457,45 @@ async function processGroupEvent(data, api) {
         ...data,
         userId: data.data?.creatorId,
         groupId: data.data?.groupId,
-        type: eventType
+        type: eventType,
+        userNames: []
     };
 
-    // Try to get user name if not already available
-    if (eventData.userId && !eventData.userName && api) {
+    // Improved user name handling for multiple users
+    if (data.data && data.data.updateMembers && Array.isArray(data.data.updateMembers) && data.data.updateMembers.length > 0) {
+        try {
+            eventData.userNames = await Promise.all(data.data.updateMembers.map(async member => {
+                if (!member.id) return member.dName || "Người dùng";
+
+                try {
+                    const userResponse = await api.getUserInfo(member.id);
+                    if (userResponse?.changed_profiles?.[member.id]) {
+                        return userResponse.changed_profiles[member.id].displayName ||
+                            userResponse.changed_profiles[member.id].zaloName ||
+                            member.dName ||
+                            `Người dùng (${member.id})`;
+                    }
+                } catch (err) {
+                    defaultLogger.debug(`Couldn't get info for user ${member.id}: ${err.message}`);
+                }
+
+                return member.dName || `Người dùng (${member.id})`;
+            }));
+        } catch (error) {
+            defaultLogger.error("Error processing member names:", error);
+            eventData.userNames = data.data.updateMembers.map(member => member.dName || `Người dùng (${member.id || ""})`);
+        }
+    } else if (eventData.userId && !eventData.userName && api) {
         try {
             const userResponse = await api.getUserInfo(eventData.userId);
-            console.log("User info response:", userResponse);
 
             if (userResponse && userResponse.changed_profiles && userResponse.changed_profiles[eventData.userId]) {
                 const userInfo = userResponse.changed_profiles[eventData.userId];
-                eventData.userName = userInfo.zaloName || userInfo.displayName || `Người dùng (${eventData.userId})`;
+                eventData.userName = userInfo.displayName || userInfo.zaloName || `Người dùng (${eventData.userId})`;
+                eventData.userNames = [eventData.userName];
             }
         } catch (error) {
-            console.error("Error getting user info:", error);
+            defaultLogger.error("Error getting user info:", error);
         }
     }
 
@@ -327,7 +509,7 @@ async function processGroupEvent(data, api) {
                 eventData.groupName = groupInfo.name || `nhóm (${eventData.groupId})`;
             }
         } catch (error) {
-            console.error("Error getting group info:", error);
+            defaultLogger.error("Error getting group info:", error);
         }
     }
 
@@ -338,41 +520,216 @@ async function processGroupEvent(data, api) {
     // Prepare attachments if any
     const attachments = [];
     if (template.attachments) {
+        // Process images if available
         if (template.attachments.image && template.attachments.image.length > 0) {
             const randomImage = getRandomTemplate(template.attachments.image);
-            attachments.push({ type: "image", url: randomImage });
+            try {
+                defaultLogger.info(`Processing image attachment: ${randomImage}`);
+                const processedImage = await processMedia(randomImage);
+                if (processedImage && isValidMediaFile(processedImage)) {
+                    attachments.push(processedImage);
+                }
+            } catch (error) {
+                defaultLogger.error("Error processing image attachment:", error);
+            }
         }
+
+        // Process videos if available
         if (template.attachments.video && template.attachments.video.length > 0) {
             const randomVideo = getRandomTemplate(template.attachments.video);
-            attachments.push({ type: "video", url: randomVideo });
+            try {
+                defaultLogger.info(`Processing video attachment: ${randomVideo}`);
+                const processedVideo = await processMedia(randomVideo);
+                if (processedVideo && isValidMediaFile(processedVideo)) {
+                    attachments.push(processedVideo);
+                }
+            } catch (error) {
+                defaultLogger.error("Error processing video attachment:", error);
+            }
+        }
+
+        // Process GIFs if available
+        if (template.attachments.gif && template.attachments.gif.length > 0) {
+            const randomGif = getRandomTemplate(template.attachments.gif);
+            try {
+                defaultLogger.info(`Processing GIF attachment: ${randomGif}`);
+                const processedGif = await processMedia(randomGif);
+                if (processedGif && isValidMediaFile(processedGif)) {
+                    attachments.push(processedGif);
+                }
+            } catch (error) {
+                defaultLogger.error("Error processing GIF attachment:", error);
+            }
         }
     }
 
     return {
         text: formattedText,
-        attachments: attachments,
+        attachments: attachments.length > 0 ? attachments : null,
         eventType: eventType,
-        groupId: eventData.groupId
+        groupId: eventData.groupId,
+        mentions: [] // Will be populated later if needed
     };
 }
 
 /**
- * Initialize group event listener
+ * Send enhanced message with styling and attachments
+ * @param {Object} api Zalo API instance
+ * @param {Object} messageData Message data to send
+ */
+async function sendEnhancedMessage(api, messageData) {
+    try {
+        // Prepare message content
+        const messageContent = {
+            msg: messageData.text,
+            // Add styling for event notifications to make them more visible
+            styles: messageData.styles || [
+                {
+                    start: 0,
+                    len: messageData.text.indexOf(':') > 0 ? messageData.text.indexOf(':') + 1 : 0,
+                    st: TextStyle.Bold
+                }
+            ],
+            // Set urgency based on message data or event type
+            urgency: messageData.urgency ||
+                (['JOIN', 'JOIN_REQUEST', 'REMIND_TOPIC'].includes(messageData.eventType) ?
+                    Urgency.Important : Urgency.Default)
+        };
+
+        // Add mentions if available in the message data
+        if (messageData.mentions && messageData.mentions.length > 0) {
+            messageContent.mentions = messageData.mentions;
+        }
+
+        // Process and validate attachments
+        if (messageData.attachments && messageData.attachments.length > 0) {
+            const processedAttachments = [];
+
+            for (const attachment of messageData.attachments) {
+                // First check if the attachment is already a valid local file path
+                if (isValidMediaFile(attachment)) {
+                    processedAttachments.push(attachment);
+                    continue;
+                }
+
+                // If it's a URL, try to download or find a previously downloaded copy
+                if (attachment.startsWith('http')) {
+                    const downloadedFile = isMediaDownloaded(attachment);
+                    if (downloadedFile) {
+                        // Use existing downloaded file
+                        processedAttachments.push(downloadedFile);
+                    } else {
+                        // Download the file
+                        try {
+                            const mediaPath = await processMedia(attachment);
+                            if (mediaPath && isValidMediaFile(mediaPath)) {
+                                processedAttachments.push(mediaPath);
+                            }
+                        } catch (err) {
+                            defaultLogger.error(`Failed to process attachment URL: ${err.message}`);
+                        }
+                    }
+                }
+            }
+
+            if (processedAttachments.length > 0) {
+                messageContent.attachments = processedAttachments;
+            }
+        }
+
+        // Send the message with enhanced features
+        await api.sendMessage(
+            messageContent,
+            messageData.groupId,
+            ThreadType.Group
+        );
+
+        defaultLogger.info(`[Group Event] Sent enhanced notification for ${messageData.eventType} to group ${messageData.groupId}`);
+    } catch (error) {
+        defaultLogger.error("Error sending enhanced message:", error);
+
+        // Fallback to simple message if enhanced sending fails
+        try {
+            await api.sendMessage(
+                messageData.text,
+                messageData.groupId,
+                ThreadType.Group
+            );
+            defaultLogger.info("[Group Event] Sent fallback simple notification");
+        } catch (fallbackError) {
+            defaultLogger.error("Failed to send even simple message:", fallbackError);
+        }
+    }
+}
+
+/**
+ * Initialize group event listener with integrated special event handling
  * @param {Object} api Zalo API instance
  * @param {Object} options Configuration options
  */
 export function initGroupEventListener(api, options = {}) {
     if (!api || !api.listener) {
-        console.error("Cannot initialize group event listener: API instance is invalid");
+        defaultLogger.error("Cannot initialize group event listener: API instance is invalid");
         return;
     }
+
+    // Ensure directories exist
+    fs.ensureDirSync(CONFIG_DIR);
+    fs.ensureDirSync(MEDIA_STORAGE_PATH);
+    fs.ensureDirSync(DEFAULT_MEDIA_PATH);
 
     // Default configuration
     const config = {
         enabledEvents: Object.values(GroupEventType), // All events enabled by default
         silentEvents: [], // No silent events by default
+        customHandlers: {}, // Custom event handlers
+        mediaTimeout: 5000, // Timeout for media downloads (ms)
+        cleanupInterval: 24, // Hours between media cleanup
         ...options
     };
+
+    // Check if template file exists, if not create from default templates
+    if (!fs.existsSync(TEMPLATE_CONFIG_PATH)) {
+        try {
+            // Create directory if it doesn't exist
+            fs.ensureDirSync(CONFIG_DIR);
+
+            // Create a default template file with basic templates for common events
+            const defaultTemplates = {
+                "JOIN_REQUEST": {
+                    "text": [
+                        "🔔 {{user}} đã yêu cầu tham gia nhóm '{{group}}' lúc {{time}}.",
+                        "📝 Có yêu cầu tham gia mới từ {{user}} vào nhóm '{{group}}' lúc {{time}}."
+                    ],
+                    "attachments": {}
+                },
+                "JOIN": {
+                    "text": [
+                        "🎉 {{user}} đã tham gia nhóm '{{group}}' lúc {{time}}!",
+                        "🧡 Nhiệt liệt chào đón {{user}} đến với {{group}} nha!",
+                        "🔥 Boom! {{user}} đã vào hội anh em tại {{group}}!"
+                    ],
+                    "attachments": {}
+                },
+                "LEAVE": {
+                    "text": [
+                        "👋 {{user}} đã rời khỏi nhóm '{{group}}' lúc {{time}}.",
+                        "🫡 Tạm biệt {{user}}! Hẹn gặp lại ở {{group}} nhé."
+                    ],
+                    "attachments": {}
+                },
+                "UNKNOWN": {
+                    "text": ["⚠️ Đã nhận sự kiện {{type}} tại {{group}} lúc {{time}}."],
+                    "attachments": {}
+                }
+            };
+
+            fs.writeJsonSync(TEMPLATE_CONFIG_PATH, defaultTemplates, { spaces: 2 });
+            defaultLogger.info("Created default group event templates");
+        } catch (error) {
+            defaultLogger.error("Error creating default templates:", error);
+        }
+    }
 
     api.listener.on("group_event", async (data) => {
         try {
@@ -382,11 +739,11 @@ export function initGroupEventListener(api, options = {}) {
                 eventTypeName = getEventTypeName(eventTypeName);
             }
 
-            console.log(`[Group Event] Received event: ${eventTypeName} (${data.type})`);
+            defaultLogger.info(`[Group Event] Received event: ${eventTypeName} (${data.type})`);
 
             // Check if this event type is enabled
             if (config.enabledEvents.indexOf(data.type) === -1) {
-                console.log(`[Group Event] Event type ${eventTypeName} is disabled, skipping`);
+                defaultLogger.debug(`[Group Event] Event type ${eventTypeName} is disabled, skipping`);
                 return;
             }
 
@@ -396,42 +753,37 @@ export function initGroupEventListener(api, options = {}) {
             // Process the event
             const messageData = await processGroupEvent(data, api);
 
-            // Handle special event types with custom handlers
-            await handleSpecialEvents(data, api);
-
             if (!messageData || !messageData.groupId) {
-                console.warn("[Group Event] Invalid message data or missing group ID");
+                defaultLogger.warn("[Group Event] Invalid message data or missing group ID");
                 return;
+            }
+
+            // Run custom handler if available
+            if (config.customHandlers && config.customHandlers[eventTypeName]) {
+                await config.customHandlers[eventTypeName](data, api, messageData);
+            } else {
+                // Handle special events based on type using default handlers
+                await handleSpecialEvents(data, api, messageData);
             }
 
             // Send notification to the group if not silent
             if (messageData.text && !isSilent) {
-                const messageOptions = {};
-
-                // Add attachments if any
-                if (messageData.attachments && messageData.attachments.length > 0) {
-                    const validAttachments = messageData.attachments.filter(att => att.url);
-                    if (validAttachments.length > 0) {
-                        messageOptions.attachments = validAttachments;
-                    }
-                }
-
-                // Send the message
-                await api.sendMessage(
-                    messageData.text,
-                    messageData.groupId,
-                    1, // Type 1 for group messages
-                    messageOptions
-                );
-
-                console.log(`[Group Event] Sent notification for ${messageData.eventType} event to group ${messageData.groupId}`);
+                // Send enhanced message
+                await sendEnhancedMessage(api, messageData);
             } else if (isSilent) {
-                console.log(`[Group Event] Silent mode for ${messageData.eventType}, notification skipped`);
+                defaultLogger.debug(`[Group Event] Silent mode for ${messageData.eventType}, notification skipped`);
             }
         } catch (error) {
-            console.error("Error handling group event:", error);
+            defaultLogger.error("Error handling group event:", error);
         }
     });
+
+    // Setup media cleanup task
+    if (config.cleanupInterval > 0) {
+        setInterval(() => {
+            cleanupOldMedia(30); // Clean media files older than 30 days
+        }, config.cleanupInterval * 60 * 60 * 1000);
+    }
 
     defaultLogger.info("Group event listener initialized successfully");
 }
@@ -440,110 +792,197 @@ export function initGroupEventListener(api, options = {}) {
  * Handle special events that require additional processing
  * @param {Object} data Event data
  * @param {Object} api Zalo API instance
+ * @param {Object} messageData Message data to potentially modify
  */
-async function handleSpecialEvents(data, api) {
-    // Map for special event handlers
-    const specialHandlers = {
-        [GroupEventType.JOIN_REQUEST]: groupEventHandlers.handleJoinRequest,
-        [GroupEventType.JOIN]: groupEventHandlers.handleJoin,
-        [GroupEventType.NEW_PIN_TOPIC]: groupEventHandlers.handleNewPinTopic,
-        [GroupEventType.REMIND_TOPIC]: groupEventHandlers.handleRemindTopic
-    };
+async function handleSpecialEvents(data, api, messageData) {
+    if (!data || !api) return;
 
-    // Get the appropriate handler for this event type
-    const handler = specialHandlers[data.type];
+    try {
+        switch (data.type) {
+            case GroupEventType.JOIN_REQUEST:
+                // Could implement auto-approval logic here
+                break;
 
-    if (handler && typeof handler === 'function') {
-        try {
-            await handler(data, api);
-        } catch (error) {
-            console.error(`Error in special handler for event type ${data.type}:`, error);
+            case GroupEventType.JOIN:
+                await handleJoinEvent(data, api, messageData);
+                break;
+
+            case GroupEventType.NEW_PIN_TOPIC:
+                // Add pin topic details to the message if available
+                if (data.data && data.data.pinTopicInfo) {
+                    const pinInfo = data.data.pinTopicInfo;
+                    messageData.text += `\n\n📌 Chủ đề: ${pinInfo.title || "Không có tiêu đề"}`;
+                    if (pinInfo.description) {
+                        messageData.text += `\n📝 Mô tả: ${pinInfo.description}`;
+                    }
+                }
+                break;
+
+            case GroupEventType.REMIND_TOPIC:
+                await handleRemindTopicEvent(data, api, messageData);
+                break;
+
+            default:
+                // Default handling for other events
+                break;
         }
+    } catch (error) {
+        defaultLogger.error(`Error in special event handler for type ${data.type}:`, error);
     }
 }
 
-export const groupEventHandlers = {
-    // Handle join requests - could be used to auto-approve specific users, etc.
-    handleJoinRequest: async (data, api) => {
-        if (data.type !== GroupEventType.JOIN_REQUEST) return;
+/**
+ * Handle join events with user mentions
+ * @param {Object} data Event data
+ * @param {Object} api Zalo API instance 
+ * @param {Object} messageData Message data to enhance
+ */
+async function handleJoinEvent(data, api, messageData) {
+    if (!data.data || !data.data.groupId) return;
 
-        // Example: Auto-approve join requests (if API supports it)
-        // if (api.approveJoinRequest) {
-        //     await api.approveJoinRequest(data.groupId, data.userId);
-        //     console.log(`Auto-approved join request for user ${data.userId} to group ${data.groupId}`);
-        // }
-    },
+    try {
+        // Handle multiple users joining at once
+        const joinedUsers = [];
 
-    // Custom handler for welcome messages with more personalization
-    handleJoin: async (data, api, database) => {
-        if (data.type !== GroupEventType.JOIN) return;
-
-        // Get joined user info
-        if (data.data && data.data.userId && api) {
-            try {
-                const userResponse = await api.getUserInfo(data.data.userId);
-
-                if (userResponse && userResponse.changed_profiles && userResponse.changed_profiles[data.data.userId]) {
-                    const userInfo = userResponse.changed_profiles[data.data.userId];
-                    const userName = userInfo.displayName || userInfo.zaloName || userInfo.username;
-
-                    // Example with database integration (if available):
-                    if (database && database.Users) {
-                        const user = await database.Users.findByPk(data.data.userId);
-                        if (user) {
-                            // Personalize welcome based on user data
-                            const customWelcome = `Chào mừng ${userName} quay trở lại! Đây là lần thứ ${user.groupJoinCount} bạn tham gia nhóm của chúng tôi.`;
-                            await api.sendMessage(customWelcome, data.data.groupId, 1);
+        // Check if we have updateMembers array (multiple users)
+        if (data.data && data.data.updateMembers && Array.isArray(data.data.updateMembers)) {
+            // Get information for all joined users
+            for (const member of data.data.updateMembers) {
+                if (member.id) {
+                    try {
+                        const userResponse = await api.getUserInfo(member.id);
+                        if (userResponse && userResponse.changed_profiles && userResponse.changed_profiles[member.id]) {
+                            const userInfo = userResponse.changed_profiles[member.id];
+                            const userName = userInfo.displayName || userInfo.zaloName || member.dName || `Người dùng (${member.id})`;
+                            joinedUsers.push({
+                                id: member.id,
+                                name: userName
+                            });
+                        } else {
+                            joinedUsers.push({
+                                id: member.id,
+                                name: member.dName || `Người dùng (${member.id})`
+                            });
                         }
+                    } catch (error) {
+                        defaultLogger.error(`Error fetching user info for member ${member.id}:`, error);
+                        joinedUsers.push({
+                            id: member.id,
+                            name: member.dName || `Người dùng (${member.id})`
+                        });
                     }
                 }
-            } catch (error) {
-                console.error("Error fetching user info for join event:", error);
             }
         }
-    },
-
-    // Handle new pinned topics
-    handleNewPinTopic: async (data, api) => {
-        if (data.type !== GroupEventType.NEW_PIN_TOPIC) return;
-
-        // Get group info to include in notification
-        if (data.data && data.data.groupId && api) {
+        // Single user join
+        else if (data.data && data.data.userId) {
             try {
-                const groupResponse = await api.getGroupInfo(data.data.groupId);
-
-                if (groupResponse && groupResponse.gridInfoMap && groupResponse.gridInfoMap[data.data.groupId]) {
-                    const groupInfo = groupResponse.gridInfoMap[data.data.groupId];
-                    console.log(`[Group Event] New topic pinned in group ${groupInfo.name} (${data.data.groupId})`);
+                const userResponse = await api.getUserInfo(data.data.userId);
+                if (userResponse && userResponse.changed_profiles && userResponse.changed_profiles[data.data.userId]) {
+                    const userInfo = userResponse.changed_profiles[data.data.userId];
+                    const userName = userInfo.displayName || userInfo.zaloName || userInfo.username || `Người dùng (${data.data.userId})`;
+                    joinedUsers.push({
+                        id: data.data.userId,
+                        name: userName
+                    });
+                } else {
+                    joinedUsers.push({
+                        id: data.data.userId,
+                        name: `Người dùng (${data.data.userId})`
+                    });
                 }
             } catch (error) {
-                console.error("Error fetching group info for pin topic event:", error);
+                defaultLogger.error("Error fetching user info for join event:", error);
+                joinedUsers.push({
+                    id: data.data.userId,
+                    name: `Người dùng (${data.data.userId})`
+                });
             }
         }
-    },
 
-    // Handle topic reminders
-    handleRemindTopic: async (data, api) => {
-        if (data.type !== GroupEventType.REMIND_TOPIC) return;
+        // If we have users to welcome, enhance the message with mentions
+        if (joinedUsers.length > 0) {
+            // Get group info
+            let groupName = messageData.groupName || `nhóm (${data.data.groupId})`;
 
-        // Example: Send additional reminder details with group info
-        if (data.data && data.data.reminderInfo && data.data.groupId) {
-            try {
-                const groupResponse = await api.getGroupInfo(data.data.groupId);
-                let groupName = `nhóm (${data.data.groupId})`;
+            // Create welcome message with mentions
+            const userNames = joinedUsers.map(user => user.name);
+            const welcomePrefix = joinedUsers.length > 1 ?
+                `🎉 Chào mừng các bạn ${userNames.join(", ")} đã tham gia` :
+                `🎉 Chào mừng ${userNames[0]} đã tham gia`;
 
-                if (groupResponse && groupResponse.gridInfoMap && groupResponse.gridInfoMap[data.data.groupId]) {
-                    groupName = groupResponse.gridInfoMap[data.data.groupId].name || groupName;
+            messageData.text = `${welcomePrefix} ${groupName}! 🥳`;
+
+            // Prepare mentions for all joined users
+            const mentions = [];
+            let pos = welcomePrefix.indexOf(userNames[0]);
+
+            for (let i = 0; i < joinedUsers.length; i++) {
+                if (pos >= 0) {
+                    mentions.push({
+                        pos: pos,
+                        len: joinedUsers[i].name.length,
+                        uid: joinedUsers[i].id
+                    });
+
+                    // Calculate position for next mention if there are more users
+                    if (i < joinedUsers.length - 1) {
+                        pos = welcomePrefix.indexOf(userNames[i + 1], pos + joinedUsers[i].name.length);
+                    }
                 }
-
-                const reminderMsg = `Nhắc nhở nhóm ${groupName}: ${data.data.reminderInfo.title || 'Chủ đề quan trọng'} - ${data.data.reminderInfo.description || 'Hãy kiểm tra thông tin mới'}`;
-                await api.sendMessage(reminderMsg, data.data.groupId, 1);
-            } catch (error) {
-                console.error("Error handling remind topic event:", error);
             }
+
+            // Update the messageData with mentions
+            messageData.mentions = mentions;
+
+            // Update styles for welcome message
+            messageData.styles = [
+                { start: 0, len: messageData.text.length, st: TextStyle.Bold }
+            ];
+
+            defaultLogger.info(`[Group Event] Enhanced welcome message with mentions for ${joinedUsers.length} users`);
         }
+    } catch (error) {
+        console.error("Error in handleJoinEvent:", error);
     }
-};
+}
+
+/**
+ * Handle reminder topic events
+ * @param {Object} data Event data
+ * @param {Object} api Zalo API instance
+ * @param {Object} messageData Message data to enhance
+ */
+async function handleRemindTopicEvent(data, api, messageData) {
+    if (!data.data || !data.data.reminderInfo) return;
+
+    try {
+        const reminderInfo = data.data.reminderInfo;
+        const reminderTitle = reminderInfo.title || 'Chủ đề quan trọng';
+        const reminderDesc = reminderInfo.description || 'Hãy kiểm tra thông tin mới';
+
+        // Create enhanced reminder message
+        messageData.text = `⏰ Nhắc nhở: ${reminderTitle}\n\n${reminderDesc}`;
+
+        // If we have group name, add it
+        if (messageData.groupName) {
+            messageData.text += `\n\n📣 Nhóm: ${messageData.groupName}`;
+        }
+
+        // Add styling for the reminder
+        messageData.styles = [
+            { start: 0, len: 10 + reminderTitle.length, st: TextStyle.Bold },
+            { start: 0, len: 1, st: TextStyle.Big }
+        ];
+
+        // Set urgency to important for reminders
+        messageData.urgency = Urgency.Important;
+
+        console.log(`[Group Event] Enhanced reminder message for topic in group ${data.data.groupId}`);
+    } catch (error) {
+        console.error("Error in handleRemindTopicEvent:", error);
+    }
+}
 
 /**
  * Update group event templates
@@ -555,7 +994,7 @@ export function updateEventTemplates(newTemplates) {
         const currentTemplates = loadEventTemplates();
         const updatedTemplates = { ...currentTemplates, ...newTemplates };
 
-        fs.writeJsonSync(configPath, updatedTemplates, { spaces: 2 });
+        fs.writeJsonSync(TEMPLATE_CONFIG_PATH, updatedTemplates, { spaces: 2 });
         console.log(`[Group Event] Templates updated successfully`);
         return true;
     } catch (error) {
@@ -564,10 +1003,40 @@ export function updateEventTemplates(newTemplates) {
     }
 }
 
-export default {
-    initGroupEventListener,
-    groupEventHandlers,
-    processGroupEvent,
-    updateEventTemplates,
-    GroupEventType
-};
+/**
+ * Clean up old media files to prevent storage issues
+ * @param {number} days Number of days to keep files
+ */
+function cleanupOldMedia(days = 30) {
+    try {
+        if (!fs.existsSync(MEDIA_STORAGE_PATH)) return;
+
+        const files = fs.readdirSync(MEDIA_STORAGE_PATH);
+        const now = Date.now();
+        const maxAge = days * 24 * 60 * 60 * 1000; // Convert days to milliseconds
+
+        let deletedCount = 0;
+
+        for (const file of files) {
+            const filePath = path.join(MEDIA_STORAGE_PATH, file);
+
+            try {
+                const stats = fs.statSync(filePath);
+                const fileAge = now - stats.mtimeMs;
+
+                if (fileAge > maxAge) {
+                    fs.unlinkSync(filePath);
+                    deletedCount++;
+                }
+            } catch (err) {
+                defaultLogger.error(`Error deleting old media file ${file}: ${err.message}`);
+            }
+        }
+
+        if (deletedCount > 0) {
+            defaultLogger.info(`Cleaned up ${deletedCount} old media files`);
+        }
+    } catch (error) {
+        defaultLogger.error(`Error cleaning up old media: ${error.message}`);
+    }
+}

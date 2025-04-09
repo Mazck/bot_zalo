@@ -510,7 +510,6 @@ class ZaloBot {
     async handleMessage(msg) {
         const { data, threadId, type } = msg;
         const fromId = data.uidFrom
-
         try {
             const isGroup = type === 1;
             const relust = await this.database.processMessage(fromId, isGroup ? threadId : null);
