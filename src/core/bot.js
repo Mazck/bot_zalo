@@ -732,7 +732,7 @@ class ZaloBot {
         if (job.imagePath) {
             const fullImagePath = job.imagePath.startsWith('/')
                 ? job.imagePath
-                : join(__dirname, '../', job.imagePath);
+                : join(__dirname, '../db/database/image', job.imagePath);
 
             if (existsSync(fullImagePath)) {
                 attachments.push(fullImagePath);
@@ -1029,7 +1029,7 @@ class ZaloBot {
             return;
         }
 
-        let message = "📅 Danh sách công việc tự động:\n\n";
+        let message = "Danh sách công việc tự động:\n\n";
 
         for (const [index, job] of schedulesData.jobs.entries()) {
             const nextRun = this.scheduledJobs.has(job.name)
@@ -1037,7 +1037,7 @@ class ZaloBot {
                 : 'N/A';
 
             message += `${index + 1}. ${job.name}\n`;
-            message += `   - Trạng thái: ${job.enabled ? '✅ Đang hoạt động' : '❌ Đã tắt'}\n`;
+            message += `   - Trạng thái: ${job.enabled ? 'Đang hoạt động' : 'Đã tắt'}\n`;
             message += `   - Lịch: ${job.timeFormat === 'human' ? job.humanTime : job.cronExpression}\n`;
             message += `   - ID nhóm/người dùng: ${job.threadId}\n`;
             message += `   - Nội dung: ${job.text ? (job.text.length > 30 ? job.text.substring(0, 30) + '...' : job.text) : 'Không có'}\n`;
@@ -1068,7 +1068,7 @@ class ZaloBot {
     async addJob(api, threadId, type, schedulesData, args) {
         if (args.length < 3) {
             await api.sendMessage(
-                "❌ Thiếu thông tin. Sử dụng: add [tên] [lịch] [tin nhắn]",
+                "Thiếu thông tin. Sử dụng: add [tên] [lịch] [tin nhắn]",
                 threadId,
                 type
             );
@@ -1093,7 +1093,7 @@ class ZaloBot {
         if (!cronExpression) {
             // If not a valid human time format or cron expression
             await api.sendMessage(
-                "❌ Định dạng thời gian không hợp lệ. Vui lòng sử dụng định dạng thời gian con người hoặc cron.",
+                "Định dạng thời gian không hợp lệ. Vui lòng sử dụng định dạng thời gian con người hoặc cron.",
                 threadId,
                 type
             );

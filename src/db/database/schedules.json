@@ -3,20 +3,21 @@
     {
       "name": "morning-greeting",
       "enabled": true,
-      "cronExpression": "0 8 12 * * *",
+      "cronExpression": "0 46 13 * * *",
       "timeFormat": "human",
-      "humanTime": "mỗi ngày lúc 12:18",
+      "humanTime": "mỗi ngày lúc 13:46",
       "threadId": "8864762235137992879",
       "isGroup": true,
-      "text": "Chào buổi sáng mọi người!",
+      "text": "Chào buổi sáng và chúc một ngày tốt lành!",
       "createdAt": "2025-04-10T10:00:00.000Z",
       "stats": {
-        "executionCount": 6,
-        "lastExecuted": "2025-04-10T05:18:00.626Z",
+        "executionCount": 8,
+        "lastExecuted": "2025-04-10T06:46:00.368Z",
         "createdAt": "2025-04-01T10:00:00.000Z"
       },
       "useDynamicContent": false,
-      "oneTime": false
+      "oneTime": false,
+      "imagePath": "test.jpg"
     }
   ]
 }
