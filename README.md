@@ -510,7 +510,7 @@ Dự án này được cấp phép theo giấy phép MIT - Xem file [LICENSE](LI
 
 <div align="center">
   <h3>🚀 Xây dựng bot Zalo của bạn ngay hôm nay!</h3>
-  <p>Được phát triển với ❤️ bởi <a href="https://github.com/your-username">Tên của bạn</a></p>
+  <p>Được phát triển với ❤️ bởi <a href="https://github.com/your-username">NTDat</a></p>
   
   <a href="https://www.npmjs.com/package/zalo-bot-nodejs">
     <img src="https://img.shields.io/npm/v/zalo-bot-nodejs?style=for-the-badge&color=orange" alt="NPM Version">
