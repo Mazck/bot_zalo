@@ -14,7 +14,7 @@ const __dirname = dirname(__filename);
 // Configuration paths
 const CONFIG_DIR = path.join(__dirname, "./data/config");
 const TEMPLATE_CONFIG_PATH = path.join(CONFIG_DIR, "./groupEventTemplates.json");
-const MEDIA_STORAGE_PATH = path.join(__dirname, "./data/storage/media");
+const MEDIA_STORAGE_PATH = path.join(__dirname, "./data/storage/media/events");
 const DEFAULT_MEDIA_PATH = path.join(__dirname, "./data/assets/default");
 
 // Default images that are included with the package
@@ -31,17 +31,75 @@ const VALID_MEDIA_EXTENSIONS = [
 ];
 
 /**
- * Load group event templates from config file
- * @returns {Object} Event templates
+ * Get all media files from event type folder
+ * @param {string} eventType The event type name (e.g., "JOIN", "LEAVE")
+ * @returns {Object} Object with arrays of media files by type (image, video, gif)
  */
+async function getMediaByEventType(eventType) {
+    const eventTypeLower = eventType.toLowerCase();
+    const eventMediaPath = path.join(MEDIA_STORAGE_PATH, eventTypeLower);
+
+    // Result object to store media by type
+    const result = {
+        image: [],
+        video: [],
+        gif: []
+    };
+
+    try {
+        // Ensure the base directory exists
+        fs.ensureDirSync(MEDIA_STORAGE_PATH);
+
+        // Check if event type folder exists
+        if (!fs.existsSync(eventMediaPath)) {
+            defaultLogger.debug(`Media folder for event type ${eventType} not found`);
+            return result;
+        }
+
+        // Read all files in the event type folder
+        const files = fs.readdirSync(eventMediaPath);
+
+        // Process each file and categorize by type
+        for (const file of files) {
+            const filePath = path.join(eventMediaPath, file);
+
+            // Check if it's a valid file
+            if (!fs.statSync(filePath).isFile()) continue;
+
+            const ext = path.extname(filePath).toLowerCase();
+
+            // Categorize the file based on extension
+            if (['.jpg', '.jpeg', '.png', '.webp'].includes(ext)) {
+                result.image.push(filePath);
+            } else if (['.mp4', '.mov', '.webm'].includes(ext)) {
+                result.video.push(filePath);
+            } else if (['.gif'].includes(ext)) {
+                result.gif.push(filePath);
+            }
+        }
+
+        defaultLogger.info(`Found ${result.image.length} images, ${result.video.length} videos, and ${result.gif.length} GIFs for event type ${eventType}`);
+    } catch (error) {
+        defaultLogger.error(`Error retrieving media for event type ${eventType}:`, error);
+    }
+
+    return result;
+}
+
 /**
- * Load group event templates from config file
- * @returns {Object} Event templates
+ * Load group event templates from config file, enhanced with dynamic media loading
+ * @returns {Object} Event templates with media
  */
 function loadEventTemplates() {
     try {
+        // Ensure config directory exists
+        fs.ensureDirSync(CONFIG_DIR);
+
         if (fs.existsSync(TEMPLATE_CONFIG_PATH)) {
-            return fs.readJsonSync(TEMPLATE_CONFIG_PATH);
+            const templates = fs.readJsonSync(TEMPLATE_CONFIG_PATH);
+
+            // For each template, enhance with media from the corresponding folder
+            return templates;  // Return templates first, we'll enhance them later when needed
         } else {
             // Skip default template creation, assume external JSON will be provided
             defaultLogger.warn("Template file not found. External JSON will be needed.");
@@ -50,6 +108,49 @@ function loadEventTemplates() {
     } catch (error) {
         defaultLogger.error("Error loading group event templates:", error);
         return {}; // Return empty object
+    }
+}
+
+/**
+ * Enhance a template with dynamic media from the corresponding event folder
+ * @param {Object} template The event template to enhance
+ * @param {string} eventType The event type name
+ * @returns {Object} Enhanced template with media
+ */
+async function enhanceTemplateWithMedia(template, eventType) {
+    if (!template) return null;
+
+    try {
+        // Get all media from the event type folder
+        const mediaFiles = await getMediaByEventType(eventType);
+
+        // Create a deep copy of the template to avoid modifying the original
+        const enhancedTemplate = JSON.parse(JSON.stringify(template));
+
+        // Initialize attachments object if not present
+        if (!enhancedTemplate.attachments) {
+            enhancedTemplate.attachments = {};
+        }
+
+        // Update image attachments if any were found
+        if (mediaFiles.image.length > 0) {
+            enhancedTemplate.attachments.image = mediaFiles.image;
+        }
+
+        // Update video attachments if any were found
+        if (mediaFiles.video.length > 0) {
+            enhancedTemplate.attachments.video = mediaFiles.video;
+        }
+
+        // Update gif attachments if any were found
+        if (mediaFiles.gif.length > 0) {
+            enhancedTemplate.attachments.gif = mediaFiles.gif;
+        }
+
+        return enhancedTemplate;
+    } catch (error) {
+        defaultLogger.error(`Error enhancing template with media for ${eventType}:`, error);
+        return template; // Return the original template if enhancement fails
     }
 }
 
@@ -428,6 +529,12 @@ async function createPlaceholderImage(filePath, type) {
  * @param {Object} api Zalo API instance
  * @returns {Promise<Object>} Message data
  */
+/**
+ * Process group event and prepare message with dynamic media loading
+ * @param {Object} data Event data
+ * @param {Object} api Zalo API instance
+ * @returns {Promise<Object>} Message data
+ */
 async function processGroupEvent(data, api) {
     const templates = loadEventTemplates();
 
@@ -440,7 +547,12 @@ async function processGroupEvent(data, api) {
     eventType = eventType || "UNKNOWN";
 
     // Find appropriate template for event type
-    const template = templates[eventType] || templates["UNKNOWN"] || null;
+    let template = templates[eventType] || templates["UNKNOWN"] || null;
+
+    // Enhance the template with media from the event type folder
+    if (template) {
+        template = await enhanceTemplateWithMedia(template, eventType);
+    }
 
     if (!template) {
         // Fallback message if no template is found
@@ -573,6 +685,32 @@ async function processGroupEvent(data, api) {
 }
 
 /**
+ * Create default directory structure for media organization
+ */
+function createMediaDirectoryStructure() {
+    // Define event types to create folders for
+    const eventTypes = [
+        'join', 'leave', 'join_request', 'kick', 'approve',
+        'decline', 'admin_update', 'nickname_update', 'avatar_update',
+        'new_pin_topic', 'remind_topic', 'unknown'
+    ];
+
+    const mediaEventsPath = path.join(__dirname, "./data/media/events");
+
+    // Ensure the base directory exists
+    fs.ensureDirSync(mediaEventsPath);
+
+    // Create a folder for each event type
+    eventTypes.forEach(eventType => {
+        const eventPath = path.join(mediaEventsPath, eventType);
+        fs.ensureDirSync(eventPath);
+        defaultLogger.debug(`Created directory for event type: ${eventType}`);
+    });
+
+    defaultLogger.info("Media directory structure created successfully");
+}
+
+/**
  * Send enhanced message with styling and attachments
  * @param {Object} api Zalo API instance
  * @param {Object} messageData Message data to send
@@ -667,6 +805,11 @@ async function sendEnhancedMessage(api, messageData) {
  * @param {Object} api Zalo API instance
  * @param {Object} options Configuration options
  */
+/**
+ * Initialize event handler with media folder structure
+ * @param {Object} api Zalo API instance
+ * @param {Object} options Configuration options
+ */
 export function initGroupEventListener(api, options = {}) {
     if (!api || !api.listener) {
         defaultLogger.error("Cannot initialize group event listener: API instance is invalid");
@@ -677,6 +820,9 @@ export function initGroupEventListener(api, options = {}) {
     fs.ensureDirSync(CONFIG_DIR);
     fs.ensureDirSync(MEDIA_STORAGE_PATH);
     fs.ensureDirSync(DEFAULT_MEDIA_PATH);
+
+    // Create media directory structure for event types
+    createMediaDirectoryStructure();
 
     // Default configuration
     const config = {
@@ -905,30 +1051,47 @@ async function handleJoinEvent(data, api, messageData) {
             // Get group info
             let groupName = messageData.groupName || `nhóm (${data.data.groupId})`;
 
-            // Create welcome message with mentions
-            const userNames = joinedUsers.map(user => user.name);
-            const welcomePrefix = joinedUsers.length > 1 ?
-                `🎉 Chào mừng các bạn ${userNames.join(", ")} đã tham gia` :
-                `🎉 Chào mừng ${userNames[0]} đã tham gia`;
+            // Load template from configuration
+            const templates = loadEventTemplates();
+            const joinTemplate = templates["JOIN"] || templates["UNKNOWN"] || null;
 
-            messageData.text = `${welcomePrefix} ${groupName}! 🥳`;
+            if (!joinTemplate || !joinTemplate.text) {
+                defaultLogger.warn("No JOIN template found, using default welcome message");
+                return;
+            }
+
+            // Get a random template from the JOIN templates
+            const textTemplate = getRandomTemplate(joinTemplate.text);
+
+            // Create event data for formatting the message
+            const eventData = {
+                userNames: joinedUsers.map(user => user.name),
+                userName: joinedUsers.map(user => user.name).join(", "),
+                groupName: groupName,
+                groupId: data.data.groupId,
+                time: moment().format("HH:mm:ss DD/MM/YYYY"),
+                type: "JOIN",
+                user: joinedUsers.map(user => user.name).join(", "),
+                group: groupName,
+                date: moment().format("DD/MM/YYYY")
+            };
+
+            // Format the welcome message using the template
+            const welcomeMessage = formatMessage(textTemplate, eventData);
+            messageData.text = welcomeMessage;
 
             // Prepare mentions for all joined users
             const mentions = [];
-            let pos = welcomePrefix.indexOf(userNames[0]);
 
-            for (let i = 0; i < joinedUsers.length; i++) {
-                if (pos >= 0) {
+            // Loop through each user to find their position in the formatted text
+            for (const user of joinedUsers) {
+                const userPos = messageData.text.indexOf(user.name);
+                if (userPos >= 0) {
                     mentions.push({
-                        pos: pos,
-                        len: joinedUsers[i].name.length,
-                        uid: joinedUsers[i].id
+                        pos: userPos,
+                        len: user.name.length,
+                        uid: user.id
                     });
-
-                    // Calculate position for next mention if there are more users
-                    if (i < joinedUsers.length - 1) {
-                        pos = welcomePrefix.indexOf(userNames[i + 1], pos + joinedUsers[i].name.length);
-                    }
                 }
             }
 

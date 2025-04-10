@@ -12,8 +12,9 @@ import chalk from 'chalk';
 import figlet from 'figlet';
 import gradient from 'gradient-string';
 import ora from 'ora';
-import handleLogin  from "../includes/handler/loginHandler.js";
+import handleLogin from "../includes/handler/loginHandler.js";
 import { initGroupEventListener } from "../includes/handler/groupEvent.js"
+import schedule from 'node-schedule';
 
 // Kiểm tra các package cần thiết
 try {
@@ -132,6 +133,8 @@ class ZaloBot {
 
             // Load all commands first and store them in this.commands
             this.commands = await this.loadCommands();
+
+            await this.handleJobs();
 
             // Load all events 
             this.events = await this.loadEvents();
@@ -501,6 +504,981 @@ class ZaloBot {
         }
 
         return events;
+    }
+
+    /**
+     * Handle creation and management of scheduled jobs for automated messaging
+     * Improved for easier time management and more comprehensive functionality
+     */
+    async handleJobs() {
+        try {
+            const __dirname = dirname(fileURLToPath(import.meta.url));
+            const schedulesPath = join(__dirname, "../db/database/schedules.json");
+
+            // Create schedules directory if it doesn't exist
+            const schedulesDir = dirname(schedulesPath);
+            if (!existsSync(schedulesDir)) {
+                pkg.mkdirSync(schedulesDir, { recursive: true });
+            }
+
+            // Check if schedules file exists, if not create an empty one
+            if (!existsSync(schedulesPath)) {
+                writeFileSync(schedulesPath, JSON.stringify({
+                    jobs: []
+                }, null, 2), 'utf-8');
+                this.logger.info('📅 Tạo file schedules.json mới');
+                return;
+            }
+
+            // Read schedules from JSON file
+            const schedulesData = JSON.parse(readFileSync(schedulesPath, 'utf-8'));
+
+            // Initialize jobs array if not present
+            if (!schedulesData.jobs || !Array.isArray(schedulesData.jobs)) {
+                schedulesData.jobs = [];
+                writeFileSync(schedulesPath, JSON.stringify(schedulesData, null, 2), 'utf-8');
+                this.logger.info('📅 Khởi tạo mảng jobs mới trong file schedules.json');
+                return;
+            }
+
+            if (schedulesData.jobs.length === 0) {
+                this.logger.info('📅 Không có công việc được lên lịch');
+                return;
+            }
+
+            // Store active jobs for management
+            this.scheduledJobs = new Map();
+
+            this.logger.info(`📅 Đang khởi tạo ${schedulesData.jobs.length} công việc theo lịch...`);
+
+            // Create a job for each schedule
+            for (const job of schedulesData.jobs) {
+                await this.setupJob(job);
+            }
+
+            // Register command to manage jobs at runtime
+            this.commands.set('managejobs', {
+                config: {
+                    name: 'managejobs',
+                    aliases: ['job', 'schedule'],
+                    description: 'Quản lý các công việc tự động',
+                    usage: 'managejobs [list|add|remove|enable|disable|update]',
+                    permissions: ['ADMIN']
+                },
+                execute: async (api, msg, args) => {
+                    await this.manageJobsCommand(api, msg, args);
+                }
+            });
+
+            this.logger.info('📅 Đã hoàn tất việc khởi tạo các công việc theo lịch');
+        } catch (error) {
+            this.logger.error('❌ Lỗi khi khởi tạo các công việc theo lịch:', error);
+        }
+    }
+
+    /**
+     * Set up an individual scheduled job
+     * @param {Object} job Job configuration object
+     * @param {boolean} isUpdate Whether this is an update to an existing job
+     */
+    async setupJob(job, isUpdate = false) {
+        if (!job.enabled) {
+            this.logger.info(`📅 Công việc "${job.name}" đang bị tắt, bỏ qua`);
+            return;
+        }
+
+        // Validate required fields
+        if (!job.cronExpression || !job.threadId || !job.name) {
+            this.logger.warn(`⚠️ Công việc "${job.name || 'không tên'}" thiếu thông tin cần thiết, bỏ qua`);
+            return;
+        }
+
+        try {
+            // If this is an update, cancel the existing job first
+            if (isUpdate && this.scheduledJobs.has(job.name)) {
+                const existingJob = this.scheduledJobs.get(job.name);
+                existingJob.cancel();
+                this.logger.info(`🔄 Đã hủy công việc hiện tại "${job.name}" để cập nhật`);
+            }
+
+            // Handle human-readable time format conversion to cron
+            let cronExpression = job.cronExpression;
+
+            // Handle special time formats
+            if (job.timeFormat === 'human') {
+                cronExpression = this.convertHumanTimeFormatToCron(job.humanTime);
+                if (!cronExpression) {
+                    this.logger.error(`❌ Định dạng thời gian không hợp lệ cho "${job.name}": ${job.humanTime}`);
+                    return;
+                }
+            }
+
+            // Schedule the job using node-schedule
+            const scheduledJob = schedule.scheduleJob(job.name, cronExpression, async () => {
+                try {
+                    this.logger.info(`🔔 Đang thực thi công việc theo lịch: "${job.name}"`);
+
+                    // Determine message type (Group or User)
+                    const messageType = job.isGroup ? 1 : 0;
+
+                    // Prepare message content
+                    let messageContent = {};
+
+                    // Add text content if available
+                    if (job.text) {
+                        messageContent.msg = job.text;
+
+                        // Process dynamic content in text if needed
+                        if (job.useDynamicContent) {
+                            messageContent.msg = this.processDynamicContent(messageContent.msg);
+                        }
+                    }
+
+                    // Add text styling if specified
+                    if (job.styles && Array.isArray(job.styles)) {
+                        messageContent.styles = job.styles;
+                    }
+
+                    // Add urgency if specified
+                    if (job.urgency) {
+                        messageContent.urgency = job.urgency;
+                    }
+
+                    // Add mentions if specified (for group messages)
+                    if (job.mentions && Array.isArray(job.mentions) && job.isGroup) {
+                        messageContent.mentions = job.mentions;
+                    }
+
+                    // Add attachments for images and videos
+                    const attachments = await this.prepareJobAttachments(job);
+
+                    // Add attachments to message content if any
+                    if (attachments.length > 0) {
+                        messageContent.attachments = attachments;
+                    }
+
+                    // Send the message
+                    if (Object.keys(messageContent).length > 0) {
+                        // If it's just a simple text message with no other properties, send as string
+                        if (Object.keys(messageContent).length === 1 && messageContent.msg && !job.useRichText) {
+                            await this.api.sendMessage(messageContent.msg, job.threadId, messageType);
+                        } else {
+                            // Otherwise send as a rich message object
+                            await this.api.sendMessage(messageContent, job.threadId, messageType);
+                        }
+                        this.logger.info(`✅ Đã gửi tin nhắn theo lịch cho "${job.name}"`);
+
+                        // Update job execution stats
+                        await this.updateJobExecutionStats(job.name);
+                    } else {
+                        this.logger.warn(`⚠️ Công việc "${job.name}" không có nội dung tin nhắn để gửi`);
+                    }
+
+                    // Execute custom function if provided
+                    if (job.customFunction && typeof job.customFunction === 'string') {
+                        await this.executeJobCustomFunction(job);
+                    }
+
+                    // Handle one-time jobs
+                    if (job.oneTime) {
+                        await this.disableJobAfterExecution(job.name);
+                    }
+                } catch (jobError) {
+                    this.logger.error(`❌ Lỗi khi thực thi công việc "${job.name}":`, jobError);
+                }
+            });
+
+            // Store the job in our map for later management
+            this.scheduledJobs.set(job.name, scheduledJob);
+
+            // Calculate and display next execution time
+            const nextExecution = scheduledJob.nextInvocation();
+            const timeUntilNext = moment(nextExecution).fromNow();
+
+            this.logger.info(`✅ Đã lên lịch công việc "${job.name}" (${cronExpression})`);
+            this.logger.info(`   └─ Lần chạy tiếp theo: ${nextExecution.toLocaleString()} (${timeUntilNext})`);
+        } catch (scheduleError) {
+            this.logger.error(`❌ Không thể lên lịch công việc "${job.name}":`, scheduleError);
+        }
+    }
+
+    /**
+     * Process dynamic content in job message text
+     * @param {string} text Original message text
+     * @returns {string} Processed text with dynamic content
+     */
+    processDynamicContent(text) {
+        // Replace dynamic variables
+        return text
+            .replace(/{date}/g, moment().format('DD/MM/YYYY'))
+            .replace(/{time}/g, moment().format('HH:mm:ss'))
+            .replace(/{datetime}/g, moment().format('DD/MM/YYYY HH:mm:ss'))
+            .replace(/{day}/g, moment().format('dddd'))
+            .replace(/{random(\d+)-(\d+)}/g, (match, min, max) => {
+                return Math.floor(Math.random() * (parseInt(max) - parseInt(min) + 1)) + parseInt(min);
+            });
+    }
+
+    /**
+     * Prepare attachments for a scheduled job
+     * @param {Object} job Job configuration
+     * @returns {Array} Array of attachment paths
+     */
+    async prepareJobAttachments(job) {
+        const __dirname = dirname(fileURLToPath(import.meta.url));
+        const attachments = [];
+
+        // Add image if provided
+        if (job.imagePath) {
+            const fullImagePath = job.imagePath.startsWith('/')
+                ? job.imagePath
+                : join(__dirname, '../', job.imagePath);
+
+            if (existsSync(fullImagePath)) {
+                attachments.push(fullImagePath);
+            } else {
+                this.logger.error(`❌ Không tìm thấy file ảnh: ${fullImagePath}`);
+            }
+        }
+
+        // Add video if provided
+        if (job.videoPath) {
+            const fullVideoPath = job.videoPath.startsWith('/')
+                ? job.videoPath
+                : join(__dirname, '../', job.videoPath);
+
+            if (existsSync(fullVideoPath)) {
+                attachments.push(fullVideoPath);
+            } else {
+                this.logger.error(`❌ Không tìm thấy file video: ${fullVideoPath}`);
+            }
+        }
+
+        // Add any additional attachments specified in the job
+        if (job.attachments && Array.isArray(job.attachments)) {
+            for (const attachment of job.attachments) {
+                const fullPath = attachment.startsWith('/')
+                    ? attachment
+                    : join(__dirname, '../', attachment);
+
+                if (existsSync(fullPath)) {
+                    attachments.push(fullPath);
+                } else {
+                    this.logger.error(`❌ Không tìm thấy file đính kèm: ${fullPath}`);
+                }
+            }
+        }
+
+        return attachments;
+    }
+
+    /**
+     * Execute custom function for a job if provided
+     * @param {Object} job Job configuration
+     */
+    async executeJobCustomFunction(job) {
+        // Check for special predefined functions first
+        if (job.customFunction === 'weatherUpdate') {
+            await this.sendWeatherUpdate(this.api, job);
+            this.logger.info(`✅ Đã thực thi hàm thời tiết cho "${job.name}"`);
+        }
+        else if (job.customFunction === 'dailyStats') {
+            await this.sendDailyStats(this.api, job);
+            this.logger.info(`✅ Đã thực thi hàm thống kê hàng ngày cho "${job.name}"`);
+        }
+        // Try to execute from global scope if not a predefined function
+        else if (typeof global[job.customFunction] === 'function') {
+            await global[job.customFunction](this.api, job);
+            this.logger.info(`✅ Đã thực thi hàm tùy chỉnh cho "${job.name}"`);
+        } else {
+            this.logger.error(`❌ Không tìm thấy hàm tùy chỉnh: ${job.customFunction}`);
+        }
+    }
+
+    /**
+     * Update execution statistics for a job
+     * @param {string} jobName Name of the job
+     */
+    async updateJobExecutionStats(jobName) {
+        try {
+            const __dirname = dirname(fileURLToPath(import.meta.url));
+            const schedulesPath = join(__dirname, "../db/database/schedules.json");
+            const schedulesData = JSON.parse(readFileSync(schedulesPath, 'utf-8'));
+
+            const jobIndex = schedulesData.jobs.findIndex(job => job.name === jobName);
+            if (jobIndex !== -1) {
+                // Initialize stats object if it doesn't exist
+                if (!schedulesData.jobs[jobIndex].stats) {
+                    schedulesData.jobs[jobIndex].stats = {
+                        executionCount: 0,
+                        lastExecuted: null,
+                        createdAt: schedulesData.jobs[jobIndex].createdAt || new Date().toISOString()
+                    };
+                }
+
+                // Update execution stats
+                schedulesData.jobs[jobIndex].stats.executionCount++;
+                schedulesData.jobs[jobIndex].stats.lastExecuted = new Date().toISOString();
+
+                // Save updated schedules
+                writeFileSync(schedulesPath, JSON.stringify(schedulesData, null, 2), 'utf-8');
+            }
+        } catch (error) {
+            this.logger.error(`❌ Lỗi khi cập nhật thống kê thực thi cho "${jobName}":`, error);
+        }
+    }
+
+    /**
+     * Disable a one-time job after execution
+     * @param {string} jobName Name of the job
+     */
+    async disableJobAfterExecution(jobName) {
+        try {
+            const __dirname = dirname(fileURLToPath(import.meta.url));
+            const schedulesPath = join(__dirname, "../db/database/schedules.json");
+            const schedulesData = JSON.parse(readFileSync(schedulesPath, 'utf-8'));
+
+            const jobIndex = schedulesData.jobs.findIndex(job => job.name === jobName);
+            if (jobIndex !== -1) {
+                // Disable the job
+                schedulesData.jobs[jobIndex].enabled = false;
+                schedulesData.jobs[jobIndex].disabledAt = new Date().toISOString();
+                schedulesData.jobs[jobIndex].disabledReason = "One-time job completed";
+
+                // Save updated schedules
+                writeFileSync(schedulesPath, JSON.stringify(schedulesData, null, 2), 'utf-8');
+
+                // Cancel the scheduled job
+                if (this.scheduledJobs.has(jobName)) {
+                    const job = this.scheduledJobs.get(jobName);
+                    job.cancel();
+                    this.scheduledJobs.delete(jobName);
+                    this.logger.info(`✅ Đã hủy và vô hiệu hóa công việc một lần "${jobName}"`);
+                }
+            }
+        } catch (error) {
+            this.logger.error(`❌ Lỗi khi vô hiệu hóa công việc một lần "${jobName}":`, error);
+        }
+    }
+
+    /**
+     * Convert human-readable time format to cron expression
+     * @param {string} humanTime Human-readable time specification
+     * @returns {string|null} Cron expression or null if invalid
+     */
+    convertHumanTimeFormatToCron(humanTime) {
+        if (!humanTime) return null;
+
+        // Common time patterns
+        const timePatterns = {
+            // Daily patterns
+            'daily at ([0-9]{1,2}):([0-9]{1,2})': (hours, minutes) => `0 ${minutes} ${hours} * * *`,
+            'every day at ([0-9]{1,2}):([0-9]{1,2})': (hours, minutes) => `0 ${minutes} ${hours} * * *`,
+            'mỗi ngày lúc ([0-9]{1,2}):([0-9]{1,2})': (hours, minutes) => `0 ${minutes} ${hours} * * *`,
+            'hàng ngày lúc ([0-9]{1,2}):([0-9]{1,2})': (hours, minutes) => `0 ${minutes} ${hours} * * *`,
+
+            // Weekly patterns
+            'every (monday|tuesday|wednesday|thursday|friday|saturday|sunday) at ([0-9]{1,2}):([0-9]{1,2})': (day, hours, minutes) => {
+                const days = { monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6, sunday: 0 };
+                return `0 ${minutes} ${hours} * * ${days[day.toLowerCase()]}`;
+            },
+            'mỗi thứ ([2-7]|chủ nhật) lúc ([0-9]{1,2}):([0-9]{1,2})': (day, hours, minutes) => {
+                const days = { '2': 1, '3': 2, '4': 3, '5': 4, '6': 5, '7': 6, 'chủ nhật': 0 };
+                return `0 ${minutes} ${hours} * * ${days[day.toLowerCase()]}`;
+            },
+
+            // Monthly patterns
+            'every ([0-9]{1,2})(st|nd|rd|th) of( the)? month at ([0-9]{1,2}):([0-9]{1,2})': (day, _, __, hours, minutes) =>
+                `0 ${minutes} ${hours} ${day} * *`,
+            'mỗi ngày ([0-9]{1,2}) hàng tháng lúc ([0-9]{1,2}):([0-9]{1,2})': (day, hours, minutes) =>
+                `0 ${minutes} ${hours} ${day} * *`,
+
+            // Interval patterns
+            'every ([0-9]+) (minute|minutes|hour|hours|day|days)': (interval, unit) => {
+                if (unit === 'minute' || unit === 'minutes') {
+                    return `*/${interval} * * * *`;
+                } else if (unit === 'hour' || unit === 'hours') {
+                    return `0 0 */${interval} * * *`;
+                } else if (unit === 'day' || unit === 'days') {
+                    return `0 0 0 */${interval} * *`;
+                }
+                return null;
+            },
+            'mỗi ([0-9]+) (phút|giờ|ngày)': (interval, unit) => {
+                if (unit === 'phút') {
+                    return `*/${interval} * * * *`;
+                } else if (unit === 'giờ') {
+                    return `0 0 */${interval} * * *`;
+                } else if (unit === 'ngày') {
+                    return `0 0 0 */${interval} * *`;
+                }
+                return null;
+            }
+        };
+
+        // Try each pattern
+        for (const [pattern, formatter] of Object.entries(timePatterns)) {
+            const regex = new RegExp(pattern, 'i');
+            const match = humanTime.match(regex);
+
+            if (match) {
+                // Remove the full match from the array, leaving only the captured groups
+                const groups = match.slice(1);
+                return formatter(...groups);
+            }
+        }
+
+        // If no pattern matches, check if it's already a valid cron expression
+        const cronRegex = /^(\*|([0-9]|1[0-9]|2[0-9]|3[0-9]|4[0-9]|5[0-9])|\*\/([0-9]|1[0-9]|2[0-9]|3[0-9]|4[0-9]|5[0-9])) (\*|([0-9]|1[0-9]|2[0-9]|3[0-9]|4[0-9]|5[0-9])|\*\/([0-9]|1[0-9]|2[0-9]|3[0-9]|4[0-9]|5[0-9])) (\*|([0-9]|1[0-9]|2[0-3])|\*\/([0-9]|1[0-9]|2[0-3])) (\*|([1-9]|1[0-9]|2[0-9]|3[0-1])|\*\/([1-9]|1[0-9]|2[0-9]|3[0-1])) (\*|([1-9]|1[0-2])|\*\/([1-9]|1[0-2])) (\*|([0-6])|\*\/([0-6]))$/;
+
+        if (cronRegex.test(humanTime)) {
+            return humanTime;
+        }
+
+        return null;
+    }
+
+    /**
+     * Command to manage jobs dynamically
+     * @param {Object} api Zalo API instance
+     * @param {Object} msg Message object
+     * @param {Array} args Command arguments
+     */
+    async manageJobsCommand(api, msg, args) {
+        const { threadId, type } = msg;
+        const operation = args[0]?.toLowerCase();
+
+        try {
+            const __dirname = dirname(fileURLToPath(import.meta.url));
+            const schedulesPath = join(__dirname, "../db/database/schedules.json");
+            let schedulesData = JSON.parse(readFileSync(schedulesPath, 'utf-8'));
+
+            // Initialize jobs array if needed
+            if (!schedulesData.jobs) {
+                schedulesData.jobs = [];
+            }
+
+            switch (operation) {
+                case 'list':
+                    // List all configured jobs with status
+                    await this.listJobs(api, threadId, type, schedulesData);
+                    break;
+
+                case 'add':
+                    // Add a new job
+                    await this.addJob(api, threadId, type, schedulesData, args.slice(1));
+                    break;
+
+                case 'remove':
+                case 'delete':
+                    // Remove a job
+                    await this.removeJob(api, threadId, type, schedulesData, args[1]);
+                    break;
+
+                case 'enable':
+                    // Enable a disabled job
+                    await this.enableJob(api, threadId, type, schedulesData, args[1]);
+                    break;
+
+                case 'disable':
+                    // Disable an active job
+                    await this.disableJob(api, threadId, type, schedulesData, args[1]);
+                    break;
+
+                case 'update':
+                    // Update job parameters
+                    await this.updateJob(api, threadId, type, schedulesData, args.slice(1));
+                    break;
+
+                default:
+                    // Show help
+                    await api.sendMessage(
+                        "Quản lý công việc tự động:\n" +
+                        "- list: Danh sách công việc\n" +
+                        "- add [tên] [lịch] [tin nhắn]: Thêm công việc mới\n" +
+                        "- remove [tên]: Xóa công việc\n" +
+                        "- enable [tên]: Bật công việc\n" +
+                        "- disable [tên]: Tắt công việc\n" +
+                        "- update [tên] [thông số] [giá trị]: Cập nhật công việc\n\n" +
+                        "Ví dụ lịch trình:\n" +
+                        "- Mỗi ngày lúc 08:00\n" +
+                        "- Mỗi thứ 2 lúc 09:15\n" +
+                        "- Mỗi ngày 15 hàng tháng lúc 10:00\n" +
+                        "- Mỗi 30 phút\n" +
+                        "- 0 8 * * * (Cú pháp cron)",
+                        threadId,
+                        type
+                    );
+            }
+        } catch (error) {
+            this.logger.error('❌ Lỗi khi quản lý công việc:', error);
+            await api.sendMessage(`❌ Đã xảy ra lỗi: ${error.message}`, threadId, type);
+        }
+    }
+
+    /**
+     * List all configured jobs
+     * @param {Object} api Zalo API instance
+     * @param {string} threadId Thread ID
+     * @param {number} type Message type
+     * @param {Object} schedulesData Schedules data
+     */
+    async listJobs(api, threadId, type, schedulesData) {
+        if (!schedulesData.jobs || schedulesData.jobs.length === 0) {
+            await api.sendMessage("Không có công việc nào được cấu hình.", threadId, type);
+            return;
+        }
+
+        let message = "📅 Danh sách công việc tự động:\n\n";
+
+        for (const [index, job] of schedulesData.jobs.entries()) {
+            const nextRun = this.scheduledJobs.has(job.name)
+                ? moment(this.scheduledJobs.get(job.name).nextInvocation()).format('DD/MM/YYYY HH:mm:ss')
+                : 'N/A';
+
+            message += `${index + 1}. ${job.name}\n`;
+            message += `   - Trạng thái: ${job.enabled ? '✅ Đang hoạt động' : '❌ Đã tắt'}\n`;
+            message += `   - Lịch: ${job.timeFormat === 'human' ? job.humanTime : job.cronExpression}\n`;
+            message += `   - ID nhóm/người dùng: ${job.threadId}\n`;
+            message += `   - Nội dung: ${job.text ? (job.text.length > 30 ? job.text.substring(0, 30) + '...' : job.text) : 'Không có'}\n`;
+
+            if (job.enabled) {
+                message += `   - Lần chạy tiếp theo: ${nextRun}\n`;
+            }
+
+            if (job.stats) {
+                message += `   - Đã chạy: ${job.stats.executionCount} lần\n`;
+                message += `   - Lần cuối: ${job.stats.lastExecuted ? moment(job.stats.lastExecuted).format('DD/MM/YYYY HH:mm:ss') : 'Chưa chạy'}\n`;
+            }
+
+            message += "\n";
+        }
+
+        await api.sendMessage(message, threadId, type);
+    }
+
+    /**
+     * Add a new scheduled job
+     * @param {Object} api Zalo API instance
+     * @param {string} threadId Thread ID
+     * @param {number} type Message type
+     * @param {Object} schedulesData Schedules data
+     * @param {Array} args Command arguments
+     */
+    async addJob(api, threadId, type, schedulesData, args) {
+        if (args.length < 3) {
+            await api.sendMessage(
+                "❌ Thiếu thông tin. Sử dụng: add [tên] [lịch] [tin nhắn]",
+                threadId,
+                type
+            );
+            return;
+        }
+
+        const jobName = args[0];
+        const timeSpec = args[1];
+        const message = args.slice(2).join(' ');
+
+        // Check if job name is already in use
+        if (schedulesData.jobs.some(job => job.name === jobName)) {
+            await api.sendMessage(`❌ Tên công việc "${jobName}" đã tồn tại.`, threadId, type);
+            return;
+        }
+
+        // Convert human time to cron if needed
+        let cronExpression = this.convertHumanTimeFormatToCron(timeSpec);
+        let timeFormat = 'cron';
+        let humanTime = null;
+
+        if (!cronExpression) {
+            // If not a valid human time format or cron expression
+            await api.sendMessage(
+                "❌ Định dạng thời gian không hợp lệ. Vui lòng sử dụng định dạng thời gian con người hoặc cron.",
+                threadId,
+                type
+            );
+            return;
+        }
+
+        // If converted from human time, store the original format
+        if (cronExpression !== timeSpec) {
+            timeFormat = 'human';
+            humanTime = timeSpec;
+        } else {
+            cronExpression = timeSpec;
+        }
+
+        // Create new job
+        const newJob = {
+            name: jobName,
+            enabled: true,
+            cronExpression: cronExpression,
+            timeFormat: timeFormat,
+            humanTime: humanTime,
+            threadId: threadId,
+            isGroup: type === 1,
+            text: message,
+            createdAt: new Date().toISOString(),
+            stats: {
+                executionCount: 0,
+                lastExecuted: null,
+                createdAt: new Date().toISOString()
+            }
+        };
+
+        // Add to schedules data
+        schedulesData.jobs.push(newJob);
+
+        // Save updated schedules
+        const __dirname = dirname(fileURLToPath(import.meta.url));
+        const schedulesPath = join(__dirname, "../db/database/schedules.json");
+        writeFileSync(schedulesPath, JSON.stringify(schedulesData, null, 2), 'utf-8');
+
+        // Setup the job
+        await this.setupJob(newJob);
+
+        await api.sendMessage(
+            `✅ Đã tạo công việc mới "${jobName}" thành công.\n` +
+            `- Lịch: ${humanTime || cronExpression}\n` +
+            `- Lần chạy đầu tiên: ${moment(this.scheduledJobs.get(jobName).nextInvocation()).format('DD/MM/YYYY HH:mm:ss')}`,
+            threadId,
+            type
+        );
+    }
+
+    /**
+ * Remove a scheduled job
+ * @param {Object} api Zalo API instance
+ * @param {string} threadId Thread ID
+ * @param {number} type Message type
+ * @param {Object} schedulesData Schedules data
+ * @param {string} jobName Name of the job to remove
+ */
+    async removeJob(api, threadId, type, schedulesData, jobName) {
+        if (!jobName) {
+            await api.sendMessage("❌ Vui lòng cung cấp tên công việc cần xóa.", threadId, type);
+            return;
+        }
+
+        const jobIndex = schedulesData.jobs.findIndex(job => job.name === jobName);
+
+        if (jobIndex === -1) {
+            await api.sendMessage(`❌ Không tìm thấy công việc "${jobName}".`, threadId, type);
+            return;
+        }
+
+        // Cancel the job if it's scheduled
+        if (this.scheduledJobs.has(jobName)) {
+            const job = this.scheduledJobs.get(jobName);
+            job.cancel();
+            this.scheduledJobs.delete(jobName);
+        }
+
+        // Remove from the jobs array
+        schedulesData.jobs.splice(jobIndex, 1);
+
+        // Save updated schedules
+        const __dirname = dirname(fileURLToPath(import.meta.url));
+        const schedulesPath = join(__dirname, "../db/database/schedules.json");
+        writeFileSync(schedulesPath, JSON.stringify(schedulesData, null, 2), 'utf-8');
+
+        await api.sendMessage(`✅ Đã xóa công việc "${jobName}" thành công.`, threadId, type);
+    }
+
+    /**
+     * Enable a disabled job
+     * @param {Object} api Zalo API instance
+     * @param {string} threadId Thread ID
+     * @param {number} type Message type
+     * @param {Object} schedulesData Schedules data
+     * @param {string} jobName Name of the job to enable
+     */
+    async enableJob(api, threadId, type, schedulesData, jobName) {
+        if (!jobName) {
+            await api.sendMessage("❌ Vui lòng cung cấp tên công việc cần bật.", threadId, type);
+            return;
+        }
+
+        const jobIndex = schedulesData.jobs.findIndex(job => job.name === jobName);
+
+        if (jobIndex === -1) {
+            await api.sendMessage(`❌ Không tìm thấy công việc "${jobName}".`, threadId, type);
+            return;
+        }
+
+        if (schedulesData.jobs[jobIndex].enabled) {
+            await api.sendMessage(`⚠️ Công việc "${jobName}" đã đang bật.`, threadId, type);
+            return;
+        }
+
+        // Update job status
+        schedulesData.jobs[jobIndex].enabled = true;
+        schedulesData.jobs[jobIndex].enabledAt = new Date().toISOString();
+        delete schedulesData.jobs[jobIndex].disabledReason;
+
+        // Save updated schedules
+        const __dirname = dirname(fileURLToPath(import.meta.url));
+        const schedulesPath = join(__dirname, "../db/database/schedules.json");
+        writeFileSync(schedulesPath, JSON.stringify(schedulesData, null, 2), 'utf-8');
+
+        // Setup the job
+        await this.setupJob(schedulesData.jobs[jobIndex]);
+
+        // Get next execution time
+        const nextExecution = this.scheduledJobs.has(jobName)
+            ? moment(this.scheduledJobs.get(jobName).nextInvocation()).format('DD/MM/YYYY HH:mm:ss')
+            : 'Không xác định';
+
+        await api.sendMessage(
+            `✅ Đã bật công việc "${jobName}" thành công.\n` +
+            `- Lần chạy tiếp theo: ${nextExecution}`,
+            threadId,
+            type
+        );
+    }
+
+    /**
+     * Disable an active job
+     * @param {Object} api Zalo API instance
+     * @param {string} threadId Thread ID
+     * @param {number} type Message type
+     * @param {Object} schedulesData Schedules data
+     * @param {string} jobName Name of the job to disable
+     */
+    async disableJob(api, threadId, type, schedulesData, jobName) {
+        if (!jobName) {
+            await api.sendMessage("❌ Vui lòng cung cấp tên công việc cần tắt.", threadId, type);
+            return;
+        }
+
+        const jobIndex = schedulesData.jobs.findIndex(job => job.name === jobName);
+
+        if (jobIndex === -1) {
+            await api.sendMessage(`❌ Không tìm thấy công việc "${jobName}".`, threadId, type);
+            return;
+        }
+
+        if (!schedulesData.jobs[jobIndex].enabled) {
+            await api.sendMessage(`⚠️ Công việc "${jobName}" đã đang tắt.`, threadId, type);
+            return;
+        }
+
+        // Update job status
+        schedulesData.jobs[jobIndex].enabled = false;
+        schedulesData.jobs[jobIndex].disabledAt = new Date().toISOString();
+        schedulesData.jobs[jobIndex].disabledReason = "Manually disabled";
+
+        // Save updated schedules
+        const __dirname = dirname(fileURLToPath(import.meta.url));
+        const schedulesPath = join(__dirname, "../db/database/schedules.json");
+        writeFileSync(schedulesPath, JSON.stringify(schedulesData, null, 2), 'utf-8');
+
+        // Cancel the job if it's scheduled
+        if (this.scheduledJobs.has(jobName)) {
+            const job = this.scheduledJobs.get(jobName);
+            job.cancel();
+            this.scheduledJobs.delete(jobName);
+        }
+
+        await api.sendMessage(`✅ Đã tắt công việc "${jobName}" thành công.`, threadId, type);
+    }
+
+    /**
+     * Update an existing job
+     * @param {Object} api Zalo API instance
+     * @param {string} threadId Thread ID
+     * @param {number} type Message type
+     * @param {Object} schedulesData Schedules data
+     * @param {Array} args Command arguments
+     */
+    async updateJob(api, threadId, type, schedulesData, args) {
+        if (args.length < 3) {
+            await api.sendMessage(
+                "❌ Thiếu thông tin. Sử dụng: update [tên] [thông số] [giá trị]",
+                threadId,
+                type
+            );
+            return;
+        }
+
+        const jobName = args[0];
+        const parameter = args[1].toLowerCase();
+        const value = args.slice(2).join(' ');
+
+        const jobIndex = schedulesData.jobs.findIndex(job => job.name === jobName);
+
+        if (jobIndex === -1) {
+            await api.sendMessage(`❌ Không tìm thấy công việc "${jobName}".`, threadId, type);
+            return;
+        }
+
+        const job = schedulesData.jobs[jobIndex];
+        let needsReschedule = false;
+
+        switch (parameter) {
+            case 'time':
+            case 'schedule':
+            case 'cron':
+            case 'lịch':
+                // Convert human time to cron if needed
+                let cronExpression = this.convertHumanTimeFormatToCron(value);
+
+                if (!cronExpression) {
+                    await api.sendMessage(
+                        "❌ Định dạng thời gian không hợp lệ. Vui lòng sử dụng định dạng thời gian con người hoặc cron.",
+                        threadId,
+                        type
+                    );
+                    return;
+                }
+
+                // If converted from human time, store the original format
+                if (cronExpression !== value) {
+                    job.timeFormat = 'human';
+                    job.humanTime = value;
+                } else {
+                    job.timeFormat = 'cron';
+                    job.humanTime = null;
+                }
+
+                job.cronExpression = cronExpression;
+                needsReschedule = true;
+                break;
+
+            case 'text':
+            case 'message':
+            case 'tin nhắn':
+            case 'nội dung':
+                job.text = value;
+                break;
+
+            case 'onetime':
+            case 'single':
+            case 'một lần':
+                job.oneTime = value.toLowerCase() === 'true' || value === '1';
+                break;
+
+            case 'dynamic':
+            case 'động':
+                job.useDynamicContent = value.toLowerCase() === 'true' || value === '1';
+                break;
+
+            case 'function':
+            case 'hàm':
+                job.customFunction = value;
+                break;
+
+            case 'name':
+            case 'tên':
+                // Check if new name is already in use
+                if (schedulesData.jobs.some(j => j.name === value && j.name !== jobName)) {
+                    await api.sendMessage(`❌ Tên công việc "${value}" đã tồn tại.`, threadId, type);
+                    return;
+                }
+
+                // Update name in scheduledJobs map
+                if (this.scheduledJobs.has(jobName)) {
+                    const scheduledJob = this.scheduledJobs.get(jobName);
+                    this.scheduledJobs.delete(jobName);
+                    this.scheduledJobs.set(value, scheduledJob);
+                }
+
+                job.name = value;
+                break;
+
+            default:
+                await api.sendMessage(
+                    "❌ Thông số không hợp lệ. Các thông số hợp lệ: time, text, onetime, dynamic, function, name",
+                    threadId,
+                    type
+                );
+                return;
+        }
+
+        // Save updated schedules
+        const __dirname = dirname(fileURLToPath(import.meta.url));
+        const schedulesPath = join(__dirname, "../db/database/schedules.json");
+        writeFileSync(schedulesPath, JSON.stringify(schedulesData, null, 2), 'utf-8');
+
+        // Reschedule if needed and job is enabled
+        if (needsReschedule && job.enabled) {
+            // Cancel current job if exists
+            if (this.scheduledJobs.has(job.name)) {
+                const scheduledJob = this.scheduledJobs.get(job.name);
+                scheduledJob.cancel();
+                this.scheduledJobs.delete(job.name);
+            }
+
+            // Setup the job again
+            await this.setupJob(job, true);
+        }
+
+        // Get next execution time if applicable
+        let nextExecution = '';
+        if (job.enabled && this.scheduledJobs.has(job.name)) {
+            nextExecution = `\n- Lần chạy tiếp theo: ${moment(this.scheduledJobs.get(job.name).nextInvocation()).format('DD/MM/YYYY HH:mm:ss')}`;
+        }
+
+        await api.sendMessage(
+            `✅ Đã cập nhật thông số "${parameter}" của công việc "${jobName}" thành công.${nextExecution}`,
+            threadId,
+            type
+        );
+    }
+
+    /**
+     * Send weather update (example custom function)
+     * @param {Object} api Zalo API instance
+     * @param {Object} job Job configuration
+     */
+    async sendWeatherUpdate(api, job) {
+        try {
+            // This is a placeholder. In a real implementation, you would fetch weather data from an API
+            const weatherData = {
+                location: 'Hà Nội',
+                temperature: Math.floor(Math.random() * 10) + 25, // Random temperature between 25-35°C
+                condition: ['Nắng', 'Mây', 'Mưa nhẹ', 'Mưa rào', 'Nắng và mây'][Math.floor(Math.random() * 5)],
+                humidity: Math.floor(Math.random() * 30) + 50, // Random humidity between 50-80%
+                wind: Math.floor(Math.random() * 10) + 5 // Random wind speed between 5-15 km/h
+            };
+
+            const message =
+                `🌤️ Dự báo thời tiết - ${weatherData.location} - ${moment().format('DD/MM/YYYY')}\n\n` +
+                `- Nhiệt độ: ${weatherData.temperature}°C\n` +
+                `- Điều kiện: ${weatherData.condition}\n` +
+                `- Độ ẩm: ${weatherData.humidity}%\n` +
+                `- Gió: ${weatherData.wind} km/h`;
+
+            await api.sendMessage(message, job.threadId, job.isGroup ? 1 : 0);
+        } catch (error) {
+            this.logger.error(`❌ Lỗi khi gửi cập nhật thời tiết:`, error);
+        }
+    }
+
+    /**
+     * Send daily statistics (example custom function)
+     * @param {Object} api Zalo API instance
+     * @param {Object} job Job configuration
+     */
+    async sendDailyStats(api, job) {
+        try {
+            // This is a placeholder. In a real implementation, you would fetch actual statistics
+            const stats = {
+                activeUsers: Math.floor(Math.random() * 500) + 1000,
+                newMessages: Math.floor(Math.random() * 5000) + 10000,
+                activeGroups: Math.floor(Math.random() * 100) + 200
+            };
+
+            const message =
+                `📊 Thống kê hàng ngày - ${moment().format('DD/MM/YYYY')}\n\n` +
+                `- Người dùng hoạt động: ${stats.activeUsers}\n` +
+                `- Tin nhắn mới: ${stats.newMessages}\n` +
+                `- Nhóm hoạt động: ${stats.activeGroups}`;
+
+            await api.sendMessage(message, job.threadId, job.isGroup ? 1 : 0);
+        } catch (error) {
+            this.logger.error(`❌ Lỗi khi gửi thống kê hàng ngày:`, error);
+        }
     }
 
     /**

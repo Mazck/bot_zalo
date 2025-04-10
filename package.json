@@ -24,6 +24,7 @@
     "module": "^1.2.5",
     "moment-timezone": "^0.5.48",
     "mysql2": "^3.14.0",
+    "node-schedule": "^2.1.1",
     "ora": "^8.2.0",
     "pidusage": "^4.0.0",
     "qrcode-terminal": "^0.12.0",
