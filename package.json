@@ -21,6 +21,7 @@
     "figlet": "^1.8.0",
     "fs-extra": "^11.3.0",
     "gradient-string": "^3.0.0",
+    "https": "^1.0.0",
     "module": "^1.2.5",
     "moment-timezone": "^0.5.48",
     "mysql2": "^3.14.0",

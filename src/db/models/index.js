@@ -954,8 +954,8 @@ class Database {
             this.logger.info('🔄 Bắt đầu đồng bộ hóa dữ liệu từ Zalo API...');
             // Get all groups
             const groups = await api.getAllGroups();
-            if (groups && groups.gridInfoMap) {
-                const groupIds = Object.keys(groups.gridInfoMap);
+            if (groups && groups.gridVerMap) {
+                const groupIds = Object.keys(groups.gridVerMap);
 
                 this.logger.info(`🔄 Đồng bộ hóa ${groupIds.length} nhóm...`);
 
@@ -963,19 +963,19 @@ class Database {
                 for (let i = 0; i < groupIds.length; i += 5) {
                     const batch = groupIds.slice(i, i + 5);
                     const groupInfo = await api.getGroupInfo(batch);
-
+                    
                     if (groupInfo && groupInfo.gridInfoMap) {
                         for (const [groupId, info] of Object.entries(groupInfo.gridInfoMap)) {
                             // Update group in database
                             await this.getOrCreateGroup(groupId, info);
 
                             // Process group members
-                            if (info.memberIds && Array.isArray(info.memberIds)) {
-                                this.logger.info(`🔄 Đồng bộ hóa ${info.memberIds.length} thành viên trong nhóm ${groupId}...`);
+                            if (info.memVerList && Array.isArray(info.memVerList)) {
+                                this.logger.info(`🔄 Đồng bộ hóa ${info.memVerList.length} thành viên trong nhóm ${groupId}...`);
 
                                 // Process members in batches
-                                for (let j = 0; j < info.memberIds.length; j += 10) {
-                                    const memberBatch = info.memberIds.slice(j, j + 10);
+                                for (let j = 0; j < info.memVerList.length; j += 10) {
+                                    const memberBatch = info.memVerList.slice(j, j + 10);
 
                                     try {
                                         const userInfo = await api.getUserInfo(memberBatch);

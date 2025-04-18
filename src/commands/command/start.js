@@ -14,7 +14,7 @@ async function onLoad({ configValue }) {
 }
 
 async function execute(api, message, args) {
-   console.log("Đã nhận lệnh khởi động bot Zalo!");
+   console.log("Đã nhận lệnh khởi động bot Zalo!" , args);
 }
 
 export default {
