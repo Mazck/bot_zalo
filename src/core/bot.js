@@ -15,7 +15,6 @@ import ora from 'ora';
 import SchedulesManager from "../includes/handler/schedulesManager.js";
 import { handlerMessage } from "../includes/handler/handlerMessage.js";
 import GroupEventsHandler from "../includes/handler/handlerEvents.js";
-import { handleNaturalLanguageCommand } from "./aiAssistant.js";
 
 // Check required packages and install if missing
 const requiredPackages = ['chalk', 'figlet', 'gradient-string', 'ora'];
