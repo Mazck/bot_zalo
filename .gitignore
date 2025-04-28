@@ -133,3 +133,32 @@ dist
 .yarn/install-state.gz
 .pnp.*
 ".env" 
+# Các file SQL
+*.sql
+*.mdf
+*.ldf
+*.db
+
+# Các file âm thanh
+*.mp3
+*.wav
+*.wma
+*.aac
+*.flac
+
+# Các file video
+*.mp4
+*.avi
+*.mov
+*.wmv
+*.mkv
+
+# Các file dữ liệu lớn
+*.dat
+*.bin
+
+# Thư mục chứa các file media
+media/
+videos/
+sounds/
+
