@@ -957,7 +957,7 @@ class Database {
             if (groups && groups.gridVerMap) {
                 const groupIds = Object.keys(groups.gridVerMap);
 
-                this.logger.info(`🔄 Đồng bộ hóa ${groupIds.length} nhóm...`);
+                //this.logger.info(`🔄 Đồng bộ hóa ${groupIds.length} nhóm...`);
 
                 // Process groups in batches to avoid rate limiting
                 for (let i = 0; i < groupIds.length; i += 5) {
@@ -971,7 +971,7 @@ class Database {
 
                             // Process group members
                             if (info.memVerList && Array.isArray(info.memVerList)) {
-                                this.logger.info(`🔄 Đồng bộ hóa ${info.memVerList.length} thành viên trong nhóm ${groupId}...`);
+                                //this.logger.info(`🔄 Đồng bộ hóa ${info.memVerList.length} thành viên trong nhóm ${groupId}...`);
 
                                 // Process members in batches
                                 for (let j = 0; j < info.memVerList.length; j += 10) {

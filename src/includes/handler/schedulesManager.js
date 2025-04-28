@@ -2280,7 +2280,7 @@ class SchedulesManager {
                 aliases: ['schedule', 'jobs', 'lịch'],
                 description: 'Quản lý các công việc tự động theo lịch',
                 usage: 'job [list|add|remove|enable|disable|update|info|run]',
-                permissions: ['ADMIN']
+                permissions: ["concu"]
             },
             execute: async (api, msg, args) => {
                 await this.handleCommand(api, msg, args);

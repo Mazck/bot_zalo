@@ -20,7 +20,7 @@ export const config = {
     description: "A template command showing the proper structure", // Command description
     usage: "{prefix}example <parameter>", // Usage instructions
     cooldown: 5, // Cooldown in seconds
-    permissions: ["user"], // Required permissions (admin, user, etc.)
+    permissions: ["user"],
     commandCategory: "utility", // Command category for organization
     isDisabled: false, // Whether the command is disabled
     isDevOnly: false, // Whether the command is only for developers
@@ -35,31 +35,8 @@ export const config = {
     }
 };
 
-/**
- * Runs when the command is loaded
- * Use for initialization, database connections, etc.
- * 
- * @param {Object} data Additional data provided during loading
- * @param {Object} data.configValue Global config values
- * @returns {Promise<void>}
- */
 export async function onLoad({ configValue }) {
-    try {
-        // Create command data directory if it doesn't exist
-        const dataPath = './data/commands/example';
-        if (!fs.existsSync(dataPath)) {
-            fs.mkdirSync(dataPath, { recursive: true });
-        }
-
-        // Initialize any resources needed for the command
-        // For example, loading cached data, setting up a database connection, etc.
-
-        // Return true to indicate successful loading
-        return true;
-    } catch (error) {
-        console.error(`[ERROR] Failed to load command ${config.name}:`, error);
-        return false;
-    }
+    
 }
 
 /**

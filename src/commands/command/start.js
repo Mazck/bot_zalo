@@ -1,7 +1,7 @@
 const config = {
     name: "start", // Changed from "say" to "start"
     version: "1.0.0",
-    hasPermssion: 0,
+    permissions: ["user"],
     credits: "Your Name",
     description: "Hiển thị thông tin của bot",
     commandCategory: "hệ thống",

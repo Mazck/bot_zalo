@@ -1,34 +1,11 @@
 {
-  "jobs": [
-    {
-      "name": "ThoiTiet",
-      "enabled": true,
-      "cronExpression": "0 00 07 * * *",
-      "timeFormat": "human",
-      "humanTime": "mỗi ngày lúc 07:00",
-      "threadId": "8864762235137992879",
-      "isGroup": true,
-      "text": "template \"Kết quả: {title} - {description}",
-      "useDynamicContent": true,
-      "createdAt": "2025-04-18T02:21:23.072Z",
-      "stats": {
-        "executionCount": 6,
-        "lastExecuted": "2025-04-18T06:14:32.870Z",
-        "createdAt": "2025-04-18T02:21:23.072Z"
-      },
-      "api": {
-        "url": "https://api.openweathermap.org/data/2.5/weather?q=Hanoi&appid=e5d03997f07602e2ef3a0c398f86605c&units=metric&lang=vi",
-        "method": "GET"
-      },
-      "template": "\"🌤️ Thời tiết {name} hôm nay:\\n- Nhiệt độ: {main.temp}°C\\n- Cảm giác như: {main.feels_like}°C\\n- Điều kiện: {weather[0].description}\\n- Độ ẩm: {main.humidity}%\""
-    }
-  ],
+  "jobs": [],
   "metadata": {
     "version": "1.0.0",
-    "lastUpdated": "2025-04-18T07:00:11.376Z",
+    "lastUpdated": "2025-04-20T13:26:51.363Z",
     "stats": {
-      "totalExecutions": 73,
-      "lastExecution": "2025-04-18T07:00:11.376Z"
+      "totalExecutions": 0,
+      "lastExecution": null
     }
   }
 }

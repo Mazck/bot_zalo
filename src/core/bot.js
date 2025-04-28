@@ -1,4 +1,4 @@
-import { Zalo } from "zca-js"
+import { GroupEventType, ThreadType, TextStyle, Urgency, Zalo } from "zca-js"
 import moment from "moment-timezone"
 import { join, dirname } from "path"
 import pkg from 'fs-extra';
@@ -12,40 +12,41 @@ import chalk from 'chalk';
 import figlet from 'figlet';
 import gradient from 'gradient-string';
 import ora from 'ora';
-import handleLogin from "../includes/handler/loginHandler.js";
-import { initGroupEventListener } from "../includes/handler/groupEvent.js"
-import schedule from 'node-schedule';
 import SchedulesManager from "../includes/handler/schedulesManager.js";
+import { handlerMessage } from "../includes/handler/handlerMessage.js";
+import GroupEventsHandler from "../includes/handler/handlerEvents.js";
+import { handleNaturalLanguageCommand } from "./aiAssistant.js";
 
-// Kiểm tra các package cần thiết
-try {
-    import('chalk');
-    import('figlet');
-    import('gradient-string');
-    import('ora');
-} catch (e) {
-    console.log('Package cần thiết chưa được cài đặt');
-    console.log('Vui lòng cài đặt bằng lệnh:');
-    console.log('npm install chalk figlet gradient-string ora');
-    process.exit(1);
+// Check required packages and install if missing
+const requiredPackages = ['chalk', 'figlet', 'gradient-string', 'ora'];
+for (const pkg of requiredPackages) {
+    try {
+        import(pkg);
+    } catch (e) {
+        console.log('Missing required packages');
+        console.log('Please install with command:');
+        console.log('npm install chalk figlet gradient-string ora');
+        process.exit(1);
+    }
 }
 
-global.data = new Object({
+// Initialize global data structure
+global.data = {
     threadInfo: new Map(),
     threadData: new Map(),
     userName: new Map(),
     userBanned: new Map(),
     threadBanned: new Map(),
     commandBanned: new Map(),
-    threadAllowNSFW: new Array(),
-    allUserID: new Array(),
-    allCurrenciesID: new Array(),
-    allThreadID: new Array()
-});
+    threadAllowNSFW: [],
+    allUserID: [],
+    allCurrenciesID: [],
+    allThreadID: [],
+    allCommands: [],
+};
 
 class ZaloBot {
     constructor() {
-        // Initialize important properties
         this.commands = new Map();
         this.events = new Map();
         this.zalo = null;
@@ -53,10 +54,49 @@ class ZaloBot {
         this.config = JSON.parse(readFileSync("./config.json", "utf-8"));
         this.cookie = existsSync("./cookie.json") ? JSON.parse(readFileSync("./cookie.json", "utf-8")) : null;
         this.logger = defaultLogger;
-        // Create a require function for checking package installation
         this.require = createRequire(import.meta.url);
         this.database = null;
         this.schedulesManager = null;
+        this.handlerMessage = null;
+        this.handlerEvents = null;
+
+        // Watchdog timer for detecting freezes
+        this.watchdogInterval = null;
+        this.lastHeartbeat = Date.now();
+        this.nodeBuiltins = new Set([
+            'fs', 'path', 'http', 'https', 'url', 'util', 'os', 'crypto',
+            'child_process', 'stream', 'zlib', 'events', 'assert', 'querystring',
+            'buffer', 'cluster', 'dgram', 'dns', 'net', 'tls', 'module',
+            'process', 'readline', 'repl', 'vm', 'timers', 'string_decoder',
+            'constants', 'punycode', 'tty', 'v8'
+        ]);
+    }
+
+    /**
+     * Initialize watchdog timer to detect console freezes
+     */
+    initWatchdog() {
+        // Set up a heartbeat check every 5 seconds
+        this.watchdogInterval = setInterval(() => {
+            const now = Date.now();
+            const elapsed = now - this.lastHeartbeat;
+
+            // If more than 10 seconds passed since last heartbeat, we might be freezing
+            if (elapsed > 10000) {
+                this.logger.warn(`⚠️ Console may be freezing - elapsed time: ${elapsed}ms`);
+                // Attempt to refresh the heartbeat
+                this.lastHeartbeat = now;
+            }
+
+            // Regular heartbeat
+            this.lastHeartbeat = now;
+
+            // Check memory usage as additional stability monitoring
+            const memUsage = process.memoryUsage();
+            if (memUsage.heapUsed / memUsage.heapTotal > 0.9) {
+                this.logger.warn(`⚠️ High memory usage: ${Math.round(memUsage.heapUsed / 1024 / 1024)}MB / ${Math.round(memUsage.heapTotal / 1024 / 1024)}MB`);
+            }
+        }, 5000);
     }
 
     /**
@@ -65,7 +105,7 @@ class ZaloBot {
     async displaySplashScreen() {
         console.clear();
 
-        // Tạo text lớn với figlet
+        // Create large text with figlet
         const titleText = figlet.textSync('ZALO BOT', {
             font: 'ANSI Shadow',
             horizontalLayout: 'default',
@@ -74,11 +114,11 @@ class ZaloBot {
             whitespaceBreak: true
         });
 
-        // Tạo gradient màu đẹp
+        // Create beautiful gradient color
         const titleColors = gradient(['#00FFFF', '#0080FF', '#0000FF', '#8000FF', '#FF00FF']);
         console.log(titleColors(titleText));
 
-        // Hiển thị thông tin bot
+        // Display bot info
         console.log('\n' + chalk.cyan('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
         console.log(chalk.cyan('┃ ') + chalk.yellow('Zalo Bot Framework') + chalk.cyan(' ┃ ') + chalk.green('Version: 1.0.0') + chalk.cyan(' ┃'));
         console.log(
@@ -91,25 +131,26 @@ class ZaloBot {
         );
         console.log(chalk.cyan('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
 
-        // Animation loading
+        // Loading animation with predefined steps to ensure it completes
         const spinner = ora({
-            text: 'Đang khởi tạo bot...',
+            text: 'Initializing bot...',
             color: 'blue'
         }).start();
 
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        spinner.text = 'Đang tải các module...';
+        const steps = [
+            { message: 'Loading modules...', delay: 500 },
+            { message: 'Connecting to Zalo...', delay: 500 },
+            { message: 'Setting up commands...', delay: 500 }
+        ];
 
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        spinner.text = 'Đang kết nối đến Zalo...';
+        for (const step of steps) {
+            await new Promise(resolve => setTimeout(resolve, step.delay));
+            spinner.text = step.message;
+        }
 
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        spinner.text = 'Đang thiết lập các lệnh...';
+        spinner.succeed('Startup complete!');
 
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        spinner.succeed('Khởi động hoàn tất!');
-
-        console.log('\n' + chalk.green('✅ Bot đã sẵn sàng!'));
+        console.log('\n' + chalk.green('✅ Bot is ready!'));
         console.log(chalk.yellow('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n'));
     }
 
@@ -117,71 +158,133 @@ class ZaloBot {
      * Initialize the Zalo bot, login and setup event listeners
      * @returns {Promise<Object>} The Zalo API object
      */
-    /**
- * Initialize the Zalo bot, login and setup event listeners
- * @returns {Promise<Object>} The Zalo API object
- */
-    /**
- * Initialize the Zalo bot, login and setup event listeners
- * @returns {Promise<Object>} The Zalo API object
- */
     async init() {
         try {
-            // Hiển thị splash screen trước khi khởi động bot
+            // Start watchdog timer to detect freezes
+            this.initWatchdog();
+
+            // Display splash screen before starting bot
             await this.displaySplashScreen();
 
+            // Initialize database
             this.database = new Database();
-            this.database.init();
+            await this.database.init();
 
-            // Load all commands first and store them in this.commands
-            this.commands = await this.loadCommands();
+            // Load commands and events in parallel for faster startup
+            const [commandsLoaded, eventsLoaded] = await Promise.all([
+                this.loadCommands(),
+                this.loadEvents()
+            ]);
 
-            // Load all events 
-            this.events = await this.loadEvents();
+            this.commands = commandsLoaded;
+            this.events = eventsLoaded;
 
-            // Initialize Zalo client
+            // Initialize Zalo client with optimized settings
             this.zalo = new Zalo({
                 selfListen: true,
                 checkUpdate: true,
                 logging: false
             });
-            //for get command name
-            // this.commands.forEach((command, name) => {
-            //    console.log(name);
 
-            // });
-            // Use the extracted login handler
+            // Login to Zalo
             this.api = await this.zalo.login({
                 cookie: this.cookie,
                 imei: this.config.imei,
                 userAgent: this.config.userAgent,
             });
 
-           
-            if (this.api) {
-                // Đồng bộ dữ liệu với database
-                this.database.syncData(this.api);
-                // Set up message event handler
-                this.api.listener.on('message', this.handleMessage.bind(this));
-                this.schedulesManager = new SchedulesManager(this.api, this.config)
-                // Set up group event handler - add this line
-                initGroupEventListener(this.api);
-                await this.schedulesManager.init();
-                this.schedulesManager.registerCommand(this.commands);
-                // Start listening for events
-                this.api.listener.start();
-                this.logger.info('Đang lắng nghe tin nhắn và sự kiện nhóm...');
-                this.logger.info(`Đã sẵn sàng xử lý ${this.commands.size} lệnh với prefix "${this.config.prefix}"`);
-
-                return this.api;
-            } else {
-                throw new Error('Không thể đăng nhập vào Zalo. Vui lòng kiểm tra lại kết nối mạng và thử lại.');
+            if (!this.api) {
+                throw new Error('Failed to log in to Zalo. Please check your network connection and try again.');
             }
-            
+
+            // Store unique command names (excluding aliases) in global.data.allCommands
+            global.data.allCommands = Array.from(this.commands.entries())
+                .filter(([name, cmd]) => cmd.config.name === name)
+                .map(([_, cmd]) => cmd.config);
+
+            // Initialize scheduler and register job command
+            this.schedulesManager = new SchedulesManager(this.api, this.config);
+            await this.schedulesManager.init();
+            this.schedulesManager.registerCommand(this.commands);
+
+            // Register job command if not already registered
+            const jobCommand = this.commands.get('job');
+            if (jobCommand && !global.data.allCommands.some(config => config.name === 'job')) {
+                global.data.allCommands.push(jobCommand.config);
+            }
+
+            // Synchronize data with database
+            await this.database.syncData(this.api);
+
+            // Set up message event handler with error protection
+            this.api.listener.on('message', (msg) => {
+                try {
+                    if (msg.data.uidFrom === this.api.listener.ctx.uid) return;
+                    
+                    this.handlerMessage = new handlerMessage(this.api, this.database, this.config, this.logger, this.commands, msg);
+                    this.handlerMessage.handleMsg();
+                } catch (error) {
+                    this.logger.error('Error handling message:', error);
+                    // Continue processing other messages even if one fails
+                }
+            });
+
+            // Set up group event handler with error protection
+            new GroupEventsHandler(this.api, this.database).initialize().start();
+
+            // Perform stability check
+            const isStable = await this.performStabilityCheck();
+            if (isStable) {
+                this.logger.info('✅ Stability check passed');
+            } else {
+                this.logger.warn('⚠️ Stability check detected potential issues');
+            }
+
+            // Start listening for events
+            this.api.listener.start();
+            this.logger.info('Listening for messages and group events...');
+            this.logger.info(`Ready to process ${this.commands.size} commands with prefix "${this.config.prefix}"`);
+
+            return this.api;
         } catch (error) {
-            this.logger.error('Không thể khởi tạo bot:', error.message);
-            this.logger.debug('Chi tiết lỗi:', error.stack);
+            this.logger.error('Cannot initialize bot:', error.message);
+            this.logger.debug('Error details:', error.stack);
+            this.cleanupWatchdog();
             process.exit(1);
+        }
+    }
+
+    /**
+     * Perform a stability check on the system
+     * @returns {Promise<boolean>} True if the system appears stable
+     */
+    async performStabilityCheck() {
+        try {
+            const spinner = ora('Performing stability check...').start();
+
+            // Check memory usage
+            const memUsage = process.memoryUsage();
+            const memoryOk = memUsage.heapUsed / memUsage.heapTotal < 0.8;
+
+            // Check CPU usage via simple operation timing
+            const startTime = process.hrtime();
+            for (let i = 0; i < 1000000; i++) {
+                // Simple operation to test CPU
+                Math.sqrt(i);
+            }
+            const [seconds, nanoseconds] = process.hrtime(startTime);
+            const cpuTimeMs = seconds * 1000 + nanoseconds / 1000000;
+            const cpuOk = cpuTimeMs < 1000; // Should take less than 1 second
+
+            // Check file system access
+            const fsOk = existsSync("./config.json");
+
+            spinner.succeed('Stability check complete');
+
+            return memoryOk && cpuOk && fsOk;
+        } catch (error) {
+            this.logger.error('Error during stability check:', error);
+            return false;
         }
     }
 
@@ -200,61 +303,73 @@ class ZaloBot {
     }
 
     /**
-     * Install a package synchronously
+     * Install a package synchronously with retry mechanism
      * @param {string} packageName The name of the package to install
      * @param {string} version The version of the package to install
      * @returns {boolean} Whether the installation was successful
      */
     installPackage(packageName, version) {
-        try {
-            this.logger.info(`⚙️ Đang cài đặt package ${packageName}@${version}...`);
-            execSync(`npm install ${packageName}@${version}`, { stdio: 'pipe' });
-            // this.logger.info(`✅ Package ${packageName}@${version} đã được cài đặt thành công!`);
-            return true;
-        } catch (error) {
-            this.logger.error(`❌ Cài đặt package ${packageName}@${version} thất bại:`, error);
-            return false;
+        // Maximum retry attempts
+        const maxRetries = 2;
+        let retries = 0;
+
+        while (retries <= maxRetries) {
+            try {
+                if (retries === 0) {
+                    this.logger.info(`⚙️ Installing package ${packageName}@${version}...`);
+                } else {
+                    this.logger.info(`⚙️ Retry ${retries}/${maxRetries}: Installing package ${packageName}@${version}...`);
+                }
+
+                execSync(`npm install ${packageName}@${version}`, { stdio: 'pipe' });
+                return true;
+            } catch (error) {
+                retries++;
+                if (retries > maxRetries) {
+                    this.logger.error(`❌ Failed to install package ${packageName}@${version}:`, error.message);
+                    return false;
+                }
+
+                // Wait a bit before retrying
+                const waitTime = retries * 1000; // Incremental backoff
+                this.logger.info(`Waiting ${waitTime}ms before retry...`);
+                execSync(`sleep ${waitTime / 1000}`);
+            }
         }
+
+        return false;
     }
 
     /**
-     * Read the command module file to find import statements
+     * Read the command module file to efficiently find import statements
      * @param {string} filePath Path to the command module file
      * @returns {string[]} Array of imported packages
      */
     extractImportsFromFile(filePath) {
         try {
             const fileContent = readFileSync(filePath, 'utf-8');
-            const imports = [];
+            // Create a combined regex to find all imports and requires in one pass
+            const importRegex = /(?:import\s+(?:.*\s+from\s+)?['"]([^./][^'"]*)['"];?)|(?:(?:const|let|var)\s+.*?=\s+require\(['"]([^./][^'"]*)['"]\))/g;
 
-            // Match both ES6 imports and CommonJS requires
-            const importRegex = /import\s+(?:.*\s+from\s+)?['"]([^./][^'"]*)['"];?/g;
-            const requireRegex = /(?:const|let|var)\s+.*?=\s+require\(['"]([^./][^'"]*)['"]\)/g;
-
+            const packages = new Set();
             let match;
+
             while ((match = importRegex.exec(fileContent)) !== null) {
-                const packageName = match[1].split('/')[0]; // Get base package name
-                if (packageName && !packageName.startsWith('.')) {
-                    imports.push(packageName);
+                const packageName = (match[1] || match[2])?.split('/')[0]; // Get base package name
+                if (packageName && !packageName.startsWith('.') && !this.nodeBuiltins.has(packageName)) {
+                    packages.add(packageName);
                 }
             }
 
-            while ((match = requireRegex.exec(fileContent)) !== null) {
-                const packageName = match[1].split('/')[0]; // Get base package name
-                if (packageName && !packageName.startsWith('.')) {
-                    imports.push(packageName);
-                }
-            }
-
-            return [...new Set(imports)]; // Remove duplicates
+            return Array.from(packages);
         } catch (error) {
-            this.logger.error(`❌ Lỗi khi đọc file ${filePath}:`, error);
+            this.logger.error(`❌ Error reading file ${filePath}:`, error);
             return [];
         }
     }
 
     /**
-     * Install all dependencies detected from imports
+     * Install all dependencies detected from imports with batch installation
      * @param {string[]} imports Array of package names
      */
     async installDetectedDependencies(imports) {
@@ -262,25 +377,33 @@ class ZaloBot {
             return;
         }
 
-        // Skip Node.js built-in modules
-        const nodeBuiltins = ['fs', 'path', 'http', 'https', 'url', 'util',
-            'os', 'crypto', 'child_process', 'stream', 'zlib', 'events',
-            'assert', 'querystring', 'buffer', 'cluster', 'dgram', 'dns',
-            'net', 'tls', 'module', 'process', 'readline', 'repl', 'vm',
-            'timers', 'string_decoder', 'constants', 'punycode', 'tty', 'v8'];
-
-        // Skip packages that are already in package.json or node_modules
+        // Filter out Node.js built-in modules and already installed packages
         const packagesToInstall = imports.filter(pkg =>
-            !nodeBuiltins.includes(pkg) &&
-            !this.isPackageInstalled(pkg)
+            !this.nodeBuiltins.has(pkg) && !this.isPackageInstalled(pkg)
         );
 
-        for (const pkg of packagesToInstall) {
-            this.installPackage(pkg, 'latest');
+        if (packagesToInstall.length === 0) {
+            return;
         }
 
-        // If any packages were installed, clear cache
-        if (packagesToInstall.length > 0) {
+        // Batch install packages for efficiency
+        try {
+            const packageList = packagesToInstall.join(' ');
+            this.logger.info(`⚙️ Batch installing packages: ${packageList}`);
+            execSync(`npm install ${packageList}`, { stdio: 'pipe' });
+
+            // Clear Node.js module cache
+            Object.keys(this.require.cache).forEach(key => {
+                delete this.require.cache[key];
+            });
+        } catch (error) {
+            this.logger.error(`❌ Batch installation failed, falling back to individual installation`);
+
+            // Fall back to individual installation
+            for (const pkg of packagesToInstall) {
+                this.installPackage(pkg, 'latest');
+            }
+
             // Clear Node.js module cache
             Object.keys(this.require.cache).forEach(key => {
                 delete this.require.cache[key];
@@ -297,140 +420,152 @@ class ZaloBot {
             return;
         }
 
-        let installSuccess = true;
+        const installPromises = [];
 
         for (const [pkg, version] of Object.entries(dependencies)) {
             if (!this.isPackageInstalled(pkg)) {
-                const success = this.installPackage(pkg, version);
-                if (!success) {
-                    installSuccess = false;
-                }
-            } else {
-                //this.logger.info(`✓ Package ${pkg} đã được cài đặt.`);
+                installPromises.push(this.installPackage(pkg, version));
             }
         }
 
-        if (!installSuccess) {
-            this.logger.warn('⚠️ Một số package cài đặt không thành công, có thể ảnh hưởng đến hoạt động của bot.');
-        }
+        if (installPromises.length > 0) {
+            const results = await Promise.all(installPromises);
+            if (results.some(success => !success)) {
+                this.logger.warn('⚠️ Some packages failed to install, this may affect bot functionality.');
+            }
 
-        // Clear Node.js module cache to allow newly installed packages to be imported
-        Object.keys(this.require.cache).forEach(key => {
-            delete this.require.cache[key];
-        });
+            // Clear Node.js module cache
+            Object.keys(this.require.cache).forEach(key => {
+                delete this.require.cache[key];
+            });
+        }
     }
 
     /**
-     * Load all commands from the commands directory
+     * Load all commands from the commands directory with optimized loading
      * @returns {Promise<Map>} Map containing command modules
      */
     async loadCommands() {
         const commands = new Map();
         const __dirname = dirname(fileURLToPath(import.meta.url));
-        const configValue = {}; // Config value to pass to onLoad
+        const configValue = {};
 
         try {
             const commandsPath = join(__dirname, "../commands");
             const dirs = readdirSync(commandsPath);
-            this.logger.info(`Đang tải lệnh từ ${dirs.length} thư mục...`);
+            this.logger.info(`Loading commands from ${dirs.length} directories...`);
+
+            // Collect all command files first
+            const commandFiles = [];
 
             for (const dir of dirs) {
                 const pathFolder = join(commandsPath, dir);
                 const files = readdirSync(pathFolder).filter(file => file.endsWith('.js'));
 
                 for (const file of files) {
-                    const modulePath = join(pathFolder, file);
-
-                    try {
-                        // First, detect and install imported packages
-                        const imports = this.extractImportsFromFile(modulePath);
-                        if (imports.length > 0) {
-                            //this.logger.info(`🔍 Phát hiện ${imports.length} package được import trong ${file}: ${imports.join(', ')}`);
-                            await this.installDetectedDependencies(imports);
-                        }
-
-                        // Now the packages should be installed, so we can import the module
-                        const moduleUrl = `file://${modulePath}`;
-
-                        try {
-                            const { default: commandModule } = await import(moduleUrl);
-
-                            if (!commandModule?.config?.name) {
-                                this.logger.warn(`⚠️ Lệnh ${file} không có config.name hợp lệ!`);
-                                continue;
-                            }
-
-                            const commandName = commandModule.config.name;
-
-                            // Check and install explicit dependencies from config if they exist
-                            if (commandModule.config.dependencies &&
-                                Object.keys(commandModule.config.dependencies).length > 0) {
-                                await this.installConfigDependencies(commandModule.config.dependencies);
-                            }
-
-                            // Execute onLoad function ONLY if it exists
-                            if (typeof commandModule.onLoad === 'function') {
-                                try {
-                                    await commandModule.onLoad({ configValue });
-                                    //this.logger.info(`✓ Đã thực thi onLoad của lệnh ${commandName}`);
-                                } catch (onLoadError) {
-                                    this.logger.error(`❌ Không thể thực thi onLoad của lệnh ${commandName}:`, onLoadError);
-                                }
-                            }
-
-                            // Make sure the execute function exists
-                            if (typeof commandModule.execute !== 'function') {
-                                this.logger.warn(`⚠️ Lệnh ${commandName} không có hàm execute!`);
-                                continue;
-                            }
-
-                            // Save module to map
-                            commands.set(commandName, commandModule);
-
-                            // Add command aliases if they exist
-                            if (commandModule.config.aliases && Array.isArray(commandModule.config.aliases)) {
-                                for (const alias of commandModule.config.aliases) {
-                                    commands.set(alias, commandModule);
-                                }
-                            }
-                            // this.logger.info(`✅ Đã tải lệnh ${commandName} [${commandModule.config.commandCategory || 'Không phân loại'}]`);
-                        } catch (importError) {
-                            this.logger.error(`❌ Lỗi khi import module ${file}:`, importError);
-                            // If there's still an import error, try to find more specific import statements
-                            // const fileContent = readFileSync(modulePath, 'utf-8');
-                            const missingPackageMatch = importError.message.match(/Cannot find package '([^']+)'/);
-                            if (missingPackageMatch) {
-                                const missingPkg = missingPackageMatch[1];
-                                this.logger.info(`🔄 Đang cố gắng cài đặt gói thiếu: ${missingPkg}`);
-                                await this.installPackage(missingPkg, 'latest');
-                                // Try importing again after installing
-                                try {
-                                    const { default: commandModule } = await import(`${moduleUrl}?update=${Date.now()}`);
-                                    if (commandModule?.config?.name) {
-                                        const commandName = commandModule.config.name;
-                                        commands.set(commandName, commandModule);
-                                        this.logger.info(`✅ Đã tải lệnh ${commandName} sau khi cài đặt dependencies`);
-                                    }
-                                } catch (retryError) {
-                                    this.logger.error(`❌ Vẫn không thể tải lệnh ${file} sau khi cài đặt dependencies:`, retryError);
-                                }
-                            }
-                        }
-                    } catch (error) {
-                        this.logger.error(`❌ Không thể tải lệnh ${file}:`, error);
-                    }
+                    commandFiles.push({
+                        dir,
+                        file,
+                        path: join(pathFolder, file)
+                    });
                 }
-                
             }
 
-            this.logger.info(`Đã tải tổng cộng ${commands.size} lệnh`);
+            // Extract imports from all files and batch install dependencies
+            const allImports = [];
+            for (const { path } of commandFiles) {
+                const imports = this.extractImportsFromFile(path);
+                allImports.push(...imports);
+            }
+
+            // Bulk install unique dependencies
+            await this.installDetectedDependencies([...new Set(allImports)]);
+
+            // Now load all command modules
+            for (const { file, path } of commandFiles) {
+                try {
+                    const moduleUrl = `file://${path}`;
+
+                    try {
+                        const { default: commandModule } = await import(moduleUrl);
+
+                        if (!commandModule?.config?.name) {
+                            this.logger.warn(`⚠️ Command ${file} has no valid config.name!`);
+                            continue;
+                        }
+
+                        const commandName = commandModule.config.name;
+
+                        // Install explicit dependencies from config if they exist
+                        if (commandModule.config.dependencies &&
+                            Object.keys(commandModule.config.dependencies).length > 0) {
+                            await this.installConfigDependencies(commandModule.config.dependencies);
+                        }
+
+                        // Execute onLoad function if it exists
+                        if (typeof commandModule.onLoad === 'function') {
+                            try {
+                                await commandModule.onLoad({ configValue });
+                            } catch (onLoadError) {
+                                this.logger.error(`❌ Cannot execute onLoad for command ${commandName}:`, onLoadError);
+                            }
+                        }
+
+                        // Make sure the execute function exists
+                        if (typeof commandModule.execute !== 'function') {
+                            this.logger.warn(`⚠️ Command ${commandName} has no execute function!`);
+                            continue;
+                        }
+
+                        // Save module to map
+                        commands.set(commandName, commandModule);
+
+                        // Add command aliases if they exist
+                        if (commandModule.config.aliases && Array.isArray(commandModule.config.aliases)) {
+                            for (const alias of commandModule.config.aliases) {
+                                commands.set(alias, commandModule);
+                            }
+                        }
+                    } catch (importError) {
+                        this.logger.error(`❌ Error importing module ${file}:`, importError);
+
+                        // Try to identify and install missing package
+                        const missingPackageMatch = importError.message.match(/Cannot find package '([^']+)'/);
+                        if (missingPackageMatch) {
+                            const missingPkg = missingPackageMatch[1];
+                            this.logger.info(`🔄 Attempting to install missing package: ${missingPkg}`);
+                            await this.installPackage(missingPkg, 'latest');
+
+                            // Try importing again after installing
+                            try {
+                                const { default: commandModule } = await import(`${moduleUrl}?update=${Date.now()}`);
+                                if (commandModule?.config?.name) {
+                                    const commandName = commandModule.config.name;
+                                    commands.set(commandName, commandModule);
+                                    this.logger.info(`✅ Loaded command ${commandName} after installing dependencies`);
+                                }
+                            } catch (retryError) {
+                                this.logger.error(`❌ Still cannot load command ${file} after installing dependencies:`, retryError);
+                            }
+                        }
+                    }
+                } catch (error) {
+                    this.logger.error(`❌ Cannot load command ${file}:`, error);
+                }
+            }
+
+            this.logger.info(`Loaded total of ${commands.size} commands`);
         } catch (error) {
-            this.logger.error('❌ Lỗi khi tải commands:', error);
+            this.logger.error('❌ Error loading commands:', error);
         }
 
         return commands;
     }
 
+    /**
+     * Load all events from the events directory with optimized loading
+     * @returns {Promise<Map>} Map containing event modules
+     */
     async loadEvents() {
         const events = new Map();
         const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -438,37 +573,43 @@ class ZaloBot {
         try {
             const eventsPath = join(__dirname, "../events");
 
-            // Kiểm tra xem thư mục events có tồn tại không
+            // Check if events directory exists
             if (!existsSync(eventsPath)) {
-                this.logger.info("Thư mục events không tồn tại, bỏ qua việc tải events.");
+                this.logger.info("Events directory does not exist, skipping event loading.");
                 return events;
             }
 
             const files = readdirSync(eventsPath).filter(file => file.endsWith('.js'));
 
             if (files.length === 0) {
-                this.logger.info("Không có file event nào được tìm thấy.");
+                this.logger.info("No event files found.");
                 return events;
             }
 
-            this.logger.info(`Đang tải ${files.length} event...`);
+            this.logger.info(`Loading ${files.length} events...`);
 
+            // Extract imports from all files and batch install dependencies
+            const allImports = [];
+            for (const file of files) {
+                const path = join(eventsPath, file);
+                const imports = this.extractImportsFromFile(path);
+                allImports.push(...imports);
+            }
+
+            // Bulk install unique dependencies
+            await this.installDetectedDependencies([...new Set(allImports)]);
+
+            // Now load all event modules
             for (const file of files) {
                 const modulePath = join(eventsPath, file);
 
                 try {
-                    // Detect and install dependencies
-                    const imports = this.extractImportsFromFile(modulePath);
-                    if (imports.length > 0) {
-                        await this.installDetectedDependencies(imports);
-                    }
-
                     // Import the event module
                     const moduleUrl = `file://${modulePath}`;
                     const { default: eventModule } = await import(moduleUrl);
 
                     if (!eventModule?.config?.name) {
-                        this.logger.warn(`⚠️ Event ${file} không có config.name hợp lệ!`);
+                        this.logger.warn(`⚠️ Event ${file} has no valid config.name!`);
                         continue;
                     }
 
@@ -485,182 +626,72 @@ class ZaloBot {
                         try {
                             await eventModule.onLoad({ bot: this });
                         } catch (onLoadError) {
-                            this.logger.error(`❌ Không thể thực thi onLoad của event ${eventName}:`, onLoadError);
+                            this.logger.error(`❌ Cannot execute onLoad for event ${eventName}:`, onLoadError);
                         }
                     }
 
-                    // Make sure the execute function exists
-                    if (typeof eventModule.execute !== 'function') {
-                        this.logger.warn(`⚠️ Event ${eventName} không có hàm execute!`);
+                    // Make sure the event function exists
+                    if (typeof eventModule.event !== 'function') {
+                        this.logger.warn(`⚠️ Event ${eventName} has no event function!`);
                         continue;
                     }
 
                     // Save to map
                     events.set(eventName, eventModule);
-                    this.logger.info(`✅ Đã tải event ${eventName}`);
+                    this.logger.info(`✅ Loaded event ${eventName}`);
 
                 } catch (error) {
-                    this.logger.error(`❌ Không thể tải event ${file}:`, error);
+                    this.logger.error(`❌ Cannot load event ${file}:`, error);
                 }
             }
 
-            this.logger.info(`Đã tải tổng cộng ${events.size} event`);
+            this.logger.info(`Loaded total of ${events.size} events`);
         } catch (error) {
-            this.logger.error('❌ Lỗi khi tải events:', error);
+            this.logger.error('❌ Error loading events:', error);
         }
 
         return events;
     }
 
     /**
-     * Handle incoming messages and process commands
-     * @param {Object} msg Message object from Zalo API
+     * Clean up the watchdog interval
      */
-    async handleMessage(msg) {
-        const { data, threadId, type } = msg;
-        const fromId = data.uidFrom
-        try {
-            const isGroup = type === 1;
-            const relust = await this.database.processMessage(fromId, isGroup ? threadId : null);
-            // Check for level up and send notification if configured
-            if (relust.user.levelUp && this.config.notifyLevelUp) {
-                const { user, oldLevel, newLevel } = relust.user;
-                try {
-                    await this.api.sendMessage(
-                        `🎉 Chúc mừng bạn đã lên cấp ${newLevel}! (Từ cấp ${oldLevel})`,
-                        threadId,
-                        type
-                    );
-                } catch (sendError) {
-                    this.logger.error('❌ Không thể gửi thông báo lên cấp:', sendError);
-                }
-            }
-
-            // Check for group level up
-            if (isGroup && relust.group?.levelUp && this.config.notifyGroupLevelUp) {
-                const { group, oldLevel, newLevel } = relust.group;
-                try {
-                    await this.api.sendMessage(
-                        `🎉 Nhóm đã lên cấp ${newLevel}! (Từ cấp ${oldLevel})`,
-                        threadId,
-                        type
-                    );
-                } catch (sendError) {
-                    this.logger.error('❌ Không thể gửi thông báo nhóm lên cấp:', sendError);
-                }
-            }
-
-            // Get message text from different possible properties
-            const text = data?.text || data?.content || data?.message || '';
-
-            if (!text || typeof text !== 'string') return;
-
-            const prefix = this.config.prefix;
-            //console.log(msg)
-            // Check if message starts with prefix
-            if (text.startsWith(prefix)) {
-                // Parse command and arguments
-                const parts = text.slice(prefix.length).trim().split(/\s+/);
-                const commandName = parts[0].toLowerCase();
-                const args = parts.slice(1);
-
-                this.logger.info(`📩 Đã nhận lệnh: ${commandName} với ${args.length} tham số`);
-
-                const userInfo = await this.database.Users.findByPk(fromId);
-                if (userInfo && userInfo.banned) {
-                    const banReason = userInfo.banReason || "Không có lý do cụ thể";
-                    try {
-                        await this.api.sendMessage(
-                            `❌ Bạn đã bị cấm sử dụng bot. Lý do: ${banReason}`,
-                            threadId,
-                            type
-                        );
-                    } catch (error) {
-                        this.logger.error('❌ Không thể gửi thông báo người dùng bị cấm:', error);
-                    }
-                    return;
-                }
-
-                // Check if group is banned (for group messages)
-                if (isGroup) {
-                    const groupInfo = await this.database.Groups.findByPk(threadId);
-                    if (groupInfo && groupInfo.banned) {
-                        const banReason = groupInfo.banReason || "Không có lý do cụ thể";
-                        try {
-                            await this.api.sendMessage(
-                                `❌ Nhóm đã bị cấm sử dụng bot. Lý do: ${banReason}`,
-                                threadId,
-                                type
-                            );
-                        } catch (error) {
-                            this.logger.error('❌ Không thể gửi thông báo nhóm bị cấm:', error);
-                        }
-                        return;
-                    }
-                }
-
-
-                // Find command by name or alias
-                const cmd = this.commands.get(commandName);
-
-                if (cmd) {
-                    this.logger.info(`🚀 Đang thực thi lệnh: ${commandName}`);
-
-                    try {
-                        // Execute command
-                        await cmd.execute(this.api, msg, args);
-                        this.logger.info(`✅ Đã thực thi lệnh ${commandName} thành công`);
-                    } catch (cmdError) {
-                        this.logger.error(`❌ Lỗi khi thực thi lệnh ${commandName}:`, cmdError);
-
-                        // Send error message to user if configured
-                        if (this.config.sendErrorMessages) {
-                            try {
-                                // Using the correct sendMessage signature
-                                await this.api.sendMessage(
-                                    `❌ Đã xảy ra lỗi khi thực thi lệnh: ${cmdError.message}`,
-                                    threadId,
-                                    type
-                                );
-                            } catch (sendError) {
-                                this.logger.error('❌ Không thể gửi thông báo lỗi:', sendError);
-                            }
-                        }
-                    }
-                } else {
-                    this.logger.warn(`⚠️ Không tìm thấy lệnh: ${commandName}`);
-
-                    // Send not found message if configured
-                    if (this.config.notifyCommandNotFound) {
-                        try {
-                            // Using the correct sendMessage signature
-                            await this.api.sendMessage(
-                                `❓ Lệnh "${commandName}" không tồn tại. Hãy sử dụng ${prefix}help để xem danh sách lệnh.`,
-                                threadId,
-                                type
-                            );
-                        } catch (sendError) {
-                            this.logger.error('❌ Không thể gửi thông báo lệnh không tồn tại:', sendError);
-                        }
-                    }
-                }
-            }
-        } catch (error) {
-            this.logger.error('❌ Lỗi xử lý tin nhắn:', error);
+    cleanupWatchdog() {
+        if (this.watchdogInterval) {
+            clearInterval(this.watchdogInterval);
+            this.watchdogInterval = null;
         }
     }
 
     /**
-     * Shutdown the bot gracefully
+     * Shutdown the bot gracefully with proper cleanup
      */
     async shutdown() {
         try {
-            if (this.api?.listener) {
+            // Stop watchdog timer
+            this.cleanupWatchdog();
+
+            // Disconnect from Zalo if connected
+            if (this.api && this.api.listener) {
                 this.api.listener.stop();
+                this.logger.info('Stopped Zalo listener');
             }
-            this.logger.info('🛑 Bot đã dừng hoạt động');
+
+            // Clean up database connections
+            if (this.database) {
+                await this.database.close();
+                this.logger.info('Closed database connections');
+            }
+
+            // Clean up scheduler
+            if (this.schedulesManager) {
+                await this.schedulesManager.shutdown();
+                this.logger.info('Shutdown scheduler');
+            }
+
+            this.logger.info('Bot shutdown complete');
         } catch (error) {
-            this.logger.error('❌ Lỗi khi dừng bot:', error);
+            this.logger.error('Error during bot shutdown:', error);
         }
     }
 }
