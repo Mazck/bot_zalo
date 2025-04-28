@@ -161,6 +161,9 @@ dist
 media/
 videos/
 sounds/
+# Loại trừ file cookie và các file JSON nhạy cảm
 *cookie*.json
 *.credentials.json
 secrets.json
+config.json
+
