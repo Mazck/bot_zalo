@@ -15,6 +15,7 @@ import ora from 'ora';
 import SchedulesManager from "../includes/handler/schedulesManager.js";
 import { handlerMessage } from "../includes/handler/handlerMessage.js";
 import GroupEventsHandler from "../includes/handler/handlerEvents.js";
+import { setupAutoUpdater } from "../utils/autoUpdate.js";
 
 // Check required packages and install if missing
 const requiredPackages = ['chalk', 'figlet', 'gradient-string', 'ora'];
@@ -192,6 +193,8 @@ class ZaloBot {
                 userAgent: this.config.userAgent,
             });
 
+            await setupAutoUpdater(this);
+            
             if (!this.api) {
                 throw new Error('Failed to log in to Zalo. Please check your network connection and try again.');
             }
