@@ -80,13 +80,10 @@
 
 ```bash
 # Sử dụng npm
-npm install zalo-bot-nodejs
+npm install install
 
-# Sử dụng yarn
-yarn add zalo-bot-nodejs
-
-# Sử dụng pnpm
-pnpm add zalo-bot-nodejs
+# run bot
+node src/main
 ```
 
 <div align="center">
