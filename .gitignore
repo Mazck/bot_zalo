@@ -161,4 +161,6 @@ dist
 media/
 videos/
 sounds/
-
+*cookie*.json
+*.credentials.json
+secrets.json
