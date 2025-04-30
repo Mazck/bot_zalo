@@ -15,7 +15,7 @@ import ora from 'ora';
 import SchedulesManager from "../includes/handler/schedulesManager.js";
 import { handlerMessage } from "../includes/handler/handlerMessage.js";
 import GroupEventsHandler from "../includes/handler/handlerEvents.js";
-import { setupAutoUpdater } from "../utils/autoUpdate.js";
+import  AutoUpdater from "../utils/autoUpdate.js";
 
 // Check required packages and install if missing
 const requiredPackages = ['chalk', 'figlet', 'gradient-string', 'ora'];
@@ -59,6 +59,17 @@ class ZaloBot {
         this.schedulesManager = null;
         this.handlerMessage = null;
         this.handlerEvents = null;
+        this.update = new AutoUpdater({
+            repository: 'Mazck/bot_zalo',
+            branch: 'main',
+            interval: '0 */6 * * *', // Check every 6 hours
+            autoInstall: true,
+            autoPull: true,
+            autoRestart: false, // Set to false to manage restart manually
+            logger: this.logger,
+            bot: this,
+            verbose: true,
+        })
 
         // Watchdog timer for detecting freezes
         this.watchdogInterval = null;
@@ -193,7 +204,7 @@ class ZaloBot {
                 userAgent: this.config.userAgent,
             });
 
-            await setupAutoUpdater(this);
+            await this.update.init();
             
             if (!this.api) {
                 throw new Error('Failed to log in to Zalo. Please check your network connection and try again.');

@@ -30,12 +30,15 @@ class AutoUpdater {
             backupDir: options.backupDir || './backups',
             adminEnabled: options.adminEnabled || process.env.ADMIN_CONSOLE === 'true',
             maxBackups: options.maxBackups || 5,
-            compareMode: options.compareMode || 'commit', // 'commit' hoặc 'files'
+            compareMode: options.compareMode || 'files', // Thay đổi mặc định sang 'files'
             notifyChanges: options.notifyChanges !== false,
             updateTimeout: options.updateTimeout || 300000, // 5 phút
             skipPaths: options.skipPaths || ['node_modules', '.git', 'backups', '.env', 'logs'],
             preUpdateCommand: options.preUpdateCommand || null,
             postUpdateCommand: options.postUpdateCommand || null,
+            // Thêm tùy chọn mới
+            updateIndividualFiles: options.updateIndividualFiles !== false,
+            hotReload: options.hotReload !== false,
         };
 
         this.logger = options.logger || defaultLogger;
@@ -50,6 +53,7 @@ class AutoUpdater {
         this.changelog = [];
         this.updateTimeout = null;
         this.webhookUrl = process.env.UPDATE_WEBHOOK_URL || null;
+        this.cachedRequireModules = new Map(); // Lưu trữ cache của module đã require
     }
 
     async init() {
@@ -201,30 +205,27 @@ class AutoUpdater {
                 return;
             }
 
-            let needsUpdate = false;
-            let changes = [];
+            // Fetch changes từ remote
+            await this.execPromise('git fetch origin');
 
-            // Phương thức so sánh
-            if (this.config.compareMode === 'commit') {
-                // So sánh dựa trên commit hash
-                needsUpdate = latestCommit !== this.lastCommit;
-            } else if (this.config.compareMode === 'files') {
-                // So sánh dựa trên sự thay đổi của file
-                changes = await this.getChangedFiles();
-                needsUpdate = changes.length > 0;
-            }
+            // Lấy danh sách các file đã thay đổi
+            const changedFiles = await this.getChangedFiles();
 
-            if (!needsUpdate) {
-                spinner.succeed('Already up to date');
+            if (changedFiles.length === 0) {
+                spinner.succeed('Already up to date. No files changed.');
+                clearTimeout(this.updateTimeout);
+                this.isRunning = false;
+                await this.releaseUpdateLock();
                 return;
             }
 
-            spinner.text = 'Update found! Preparing to update...';
+            spinner.text = `Update found! ${changedFiles.length} file(s) changed.`;
 
-            // Lưu changelog nếu có thể
-            if (this.config.compareMode === 'commit') {
-                this.changelog = await this.getChangelog(this.lastCommit, latestCommit);
-            }
+            // Lưu changelog
+            this.changelog = await this.getChangelog(this.lastCommit, latestCommit);
+
+            // Tạo backup trước khi cập nhật
+            await this.createBackup();
 
             // Chạy lệnh pre-update nếu được cấu hình
             if (this.config.preUpdateCommand) {
@@ -232,12 +233,19 @@ class AutoUpdater {
                 await this.execPromise(this.config.preUpdateCommand);
             }
 
-            // Tạo backup trước khi cập nhật
-            await this.createBackup();
+            if (this.config.updateIndividualFiles) {
+                // Cập nhật từng file riêng lẻ
+                spinner.text = 'Updating individual files...';
+                await this.updateIndividualFiles(changedFiles);
 
-            if (this.config.autoPull) {
-                spinner.text = 'Pulling latest changes...';
-                await this.pullChanges();
+                // Đánh dấu là đã cập nhật đến commit mới nhất
+                await this.saveLastCommit(latestCommit);
+            } else {
+                // Pull toàn bộ thay đổi
+                if (this.config.autoPull) {
+                    spinner.text = 'Pulling latest changes...';
+                    await this.pullChanges();
+                }
             }
 
             if (this.config.autoInstall) {
@@ -245,29 +253,29 @@ class AutoUpdater {
                 await this.installDependencies();
             }
 
-            // Lưu commit hash mới
-            await this.saveLastCommit(latestCommit);
-
             // Chạy lệnh post-update nếu được cấu hình
             if (this.config.postUpdateCommand) {
                 spinner.text = 'Running post-update command...';
                 await this.execPromise(this.config.postUpdateCommand);
             }
 
-            spinner.succeed(chalk.green(`✅ Update successful! New commit: ${latestCommit.substring(0, 7)}`));
+            // Hot reload các module đã thay đổi
+            if (this.config.hotReload) {
+                spinner.text = 'Hot reloading updated modules...';
+                await this.hotReloadModules(changedFiles);
+            }
+
+            spinner.succeed(chalk.green(`✅ Update successful! Updated ${changedFiles.length} files to commit: ${latestCommit.substring(0, 7)}`));
 
             // Dọn dẹp các bản backup cũ
             await this.cleanupOldBackups();
 
             // Gửi thông báo về các thay đổi nếu được bật
             if (this.config.notifyChanges) {
-                await this.notifyChanges(latestCommit);
+                await this.notifyChanges(latestCommit, changedFiles);
             }
 
-            // Khởi động lại bot nếu được cấu hình
-            if (this.config.autoRestart) {
-                await this.restartBot();
-            }
+            // Không khởi động lại bot - Theo yêu cầu
         } catch (error) {
             spinner.fail('Update failed');
             this.logger.error(chalk.red('Update error:'), error);
@@ -307,7 +315,6 @@ class AutoUpdater {
 
     async getChangedFiles() {
         try {
-            await this.execPromise('git fetch origin');
             const result = await this.execPromise(`git diff --name-only HEAD origin/${this.config.branch}`);
 
             if (!result.stdout.trim()) return [];
@@ -321,6 +328,105 @@ class AutoUpdater {
         } catch (error) {
             this.logger.error(chalk.red('❌ Failed to get changed files:'), error);
             return [];
+        }
+    }
+
+    // Phương thức mới để cập nhật từng file riêng lẻ
+    async updateIndividualFiles(changedFiles) {
+        if (!changedFiles.length) return;
+
+        try {
+            for (const file of changedFiles) {
+                this.logger.info(chalk.blue(`📄 Updating file: ${file}`));
+
+                // Tạo backup cho file hiện tại
+                if (existsSync(join(this.__dirname, '..', file))) {
+                    await fs.copyFile(
+                        join(this.__dirname, '..', file),
+                        join(this.__dirname, '..', `${file}.bak`)
+                    );
+                }
+
+                try {
+                    // Lấy nội dung từ remote và ghi đè file
+                    const result = await this.execPromise(`git show origin/${this.config.branch}:${file}`);
+
+                    // Đảm bảo thư mục tồn tại
+                    const dir = dirname(join(this.__dirname, '..', file));
+                    await fs.mkdir(dir, { recursive: true });
+
+                    // Ghi nội dung mới vào file
+                    await fs.writeFile(join(this.__dirname, '..', file), result.stdout);
+
+                    // Xóa backup nếu thành công
+                    if (existsSync(join(this.__dirname, '..', `${file}.bak`))) {
+                        await fs.unlink(join(this.__dirname, '..', `${file}.bak`));
+                    }
+                } catch (error) {
+                    this.logger.error(chalk.red(`❌ Failed to update file ${file}:`), error);
+
+                    // Khôi phục từ backup nếu có lỗi
+                    if (existsSync(join(this.__dirname, '..', `${file}.bak`))) {
+                        await fs.copyFile(
+                            join(this.__dirname, '..', `${file}.bak`),
+                            join(this.__dirname, '..', file)
+                        );
+                        await fs.unlink(join(this.__dirname, '..', `${file}.bak`));
+                        this.logger.info(chalk.yellow(`⚠️ Restored backup for file: ${file}`));
+                    }
+                }
+            }
+        } catch (error) {
+            this.logger.error(chalk.red('❌ Failed to update individual files:'), error);
+            throw error;
+        }
+    }
+
+    // Phương thức mới để hot reload các module đã thay đổi
+    async hotReloadModules(changedFiles) {
+        if (!changedFiles.length) return;
+
+        try {
+            const jsFiles = changedFiles.filter(file =>
+                file.endsWith('.js') ||
+                file.endsWith('.mjs') ||
+                file.endsWith('.cjs')
+            );
+
+            if (!jsFiles.length) {
+                this.logger.info(chalk.blue('No JavaScript modules to reload'));
+                return;
+            }
+
+            this.logger.info(chalk.blue(`🔄 Hot reloading ${jsFiles.length} module(s)`));
+
+            for (const file of jsFiles) {
+                try {
+                    const modulePath = join(this.__dirname, '..', file);
+                    const relativeModulePath = join('..', file);
+
+                    // Xóa cache module
+                    if (require.cache[require.resolve(modulePath)]) {
+                        delete require.cache[require.resolve(modulePath)];
+                        this.logger.info(chalk.blue(`🔄 Reloaded module: ${file}`));
+                    }
+
+                    // Xóa cache cho ES modules
+                    try {
+                        const moduleUrl = new URL(relativeModulePath, import.meta.url).href;
+                        // Trong ES modules, không có cache chính thức, nhưng chúng ta vẫn thông báo
+                        this.logger.info(chalk.blue(`🔄 Reloaded ES module: ${file}`));
+                    } catch (e) {
+                        // Bỏ qua lỗi khi không phải ES module
+                    }
+                } catch (error) {
+                    this.logger.warn(chalk.yellow(`⚠️ Could not reload module ${file}:`), error);
+                }
+            }
+
+            this.logger.info(chalk.green('✅ Hot reload completed'));
+        } catch (error) {
+            this.logger.error(chalk.red('❌ Failed to hot reload modules:'), error);
         }
     }
 
@@ -501,7 +607,7 @@ class AutoUpdater {
         }
     }
 
-    async notifyChanges(newCommit) {
+    async notifyChanges(newCommit, changedFiles = []) {
         if (!this.changelog.length) return;
 
         // Log thông báo
@@ -510,14 +616,26 @@ class AutoUpdater {
             this.logger.info(chalk.gray(`  ${change}`));
         }
 
+        // Log các file đã thay đổi
+        if (changedFiles.length) {
+            this.logger.info(chalk.green('📂 Changed files:'));
+            for (const file of changedFiles) {
+                this.logger.info(chalk.gray(`  ${file}`));
+            }
+        }
+
         // Gửi webhook nếu được cấu hình
         if (this.webhookUrl) {
             try {
+                const filesDescription = changedFiles.length > 0
+                    ? `\n\n**Changed files:**\n${changedFiles.map(f => `- \`${f}\``).join('\n')}`
+                    : '';
+
                 const payload = {
                     content: `**Bot updated to ${newCommit.substring(0, 7)}**`,
                     embeds: [{
                         title: 'Update Changelog',
-                        description: this.changelog.join('\n'),
+                        description: this.changelog.join('\n') + filesDescription,
                         color: 3066993,
                         footer: {
                             text: `Updated at ${new Date().toISOString()}`
@@ -629,121 +747,90 @@ class AutoUpdater {
                 console.log(chalk.gray('  recover        - Recover from the latest backup'));
                 console.log(chalk.gray('  config         - Show current configuration'));
                 console.log(chalk.gray('  exit           - Exit the application'));
+                break; console.log(chalk.gray('  exit           - Exit the application'));
                 break;
+
             case 'update':
+                console.log(chalk.blue('🔍 Checking for updates...'));
                 await this.checkForUpdates();
                 break;
+
             case 'force-update':
+                console.log(chalk.blue('🔄 Forcing update...'));
                 await this.checkForUpdates(true);
                 break;
+
             case 'restart':
+                console.log(chalk.blue('🔄 Restarting...'));
                 await this.restartBot();
                 break;
+
             case 'status':
-                const currentCommit = await this.getCurrentCommit();
-                console.log(chalk.cyan('Update Status:'));
-                console.log(chalk.gray(`  Last update: ${this.lastCommit.substring(0, 7)}`));
-                console.log(chalk.gray(`  Current commit: ${currentCommit.substring(0, 7)}`));
-                console.log(chalk.gray(`  Update running: ${this.isRunning ? 'Yes' : 'No'}`));
-                console.log(chalk.gray(`  Update locked: ${existsSync(this.updateLockPath) ? 'Yes' : 'No'}`));
+                console.log(chalk.cyan('📊 Status:'));
+                console.log(chalk.gray(`  Running: ${this.isRunning}`));
+                console.log(chalk.gray(`  Last commit: ${this.lastCommit?.substring(0, 7) || 'unknown'}`));
+                console.log(chalk.gray(`  Update schedule: ${this.config.interval}`));
+
+                try {
+                    const latestCommit = await this.getLatestCommit();
+                    console.log(chalk.gray(`  Latest commit: ${latestCommit?.substring(0, 7) || 'unknown'}`));
+
+                    const needsUpdate = latestCommit && latestCommit !== this.lastCommit;
+                    console.log(chalk.gray(`  Needs update: ${needsUpdate ? chalk.yellow('Yes') : chalk.green('No')}`));
+
+                    if (needsUpdate) {
+                        const changedFiles = await this.getChangedFiles();
+                        console.log(chalk.gray(`  Changed files: ${changedFiles.length}`));
+                    }
+                } catch (error) {
+                    console.log(chalk.red(`  Error checking status: ${error.message}`));
+                }
                 break;
+
             case 'backup':
+                console.log(chalk.blue('📦 Creating backup...'));
                 const backupName = await this.createBackup();
-                console.log(chalk.green(`✅ Manual backup created: ${backupName}`));
+                console.log(chalk.green(`✅ Backup created: ${backupName}`));
                 break;
+
             case 'recover':
-                await this.recoverFromBackup();
+                console.log(chalk.yellow('⚠️ Recovering from latest backup...'));
+                const success = await this.recoverFromBackup();
+                if (success) {
+                    console.log(chalk.green('✅ Recovery successful'));
+                } else {
+                    console.log(chalk.red('❌ Recovery failed'));
+                }
                 break;
+
             case 'config':
-                console.log(chalk.cyan('Current configuration:'));
+                console.log(chalk.cyan('⚙️ Configuration:'));
                 Object.entries(this.config).forEach(([key, value]) => {
-                    if (key === 'token') value = value ? '********' : null;
-                    console.log(chalk.gray(`  ${key}: ${value}`));
+                    console.log(chalk.gray(`  ${key}: ${typeof value === 'object' ? JSON.stringify(value) : value}`));
                 });
                 break;
-            case 'reset':
-                await this.reset();
-                console.log(chalk.green('✅ Auto-updater reset successfully'));
-                break;
+
             case 'exit':
-                console.log(chalk.yellow('Exiting application...'));
+                console.log(chalk.blue('👋 Exiting...'));
                 process.exit(0);
                 break;
+
             default:
-                this.logger.warn(chalk.yellow(`⚠️ Unknown command: ${command}. Type 'help' for available commands.`));
+                console.log(chalk.red(`❌ Unknown command: ${command}`));
+                console.log(chalk.gray('Type "help" for available commands'));
         }
     }
 
     execPromise(command) {
         return new Promise((resolve, reject) => {
-            exec(command, { maxBuffer: 1024 * 1024 * 10 }, (error, stdout, stderr) => {
+            exec(command, { cwd: join(this.__dirname, '..') }, (error, stdout, stderr) => {
                 if (error) {
-                    error.stdout = stdout;
-                    error.stderr = stderr;
-                    reject(error);
-                } else {
-                    resolve({ stdout, stderr });
+                    return reject(error);
                 }
+                resolve({ stdout, stderr });
             });
         });
     }
 }
 
-export async function setupAutoUpdater(botInstance) {
-    const __dirname = dirname(fileURLToPath(import.meta.url));
-    const configPath = join(__dirname, '../config/autoupdate.json');
-
-    let config = {
-        repository: process.env.GITHUB_REPO,
-        branch: process.env.GITHUB_BRANCH || 'main',
-        interval: process.env.UPDATE_INTERVAL || '0 */2 * * *',
-        autoInstall: process.env.AUTO_INSTALL !== 'true',
-        autoPull: process.env.AUTO_PULL !== 'false',
-        autoRestart: process.env.AUTO_RESTART !== 'false',
-        token: process.env.GITHUB_TOKEN || null,
-        verbose: process.env.UPDATE_VERBOSE === 'true',
-        backupDir: join(__dirname, '../backups'),
-        adminEnabled: process.env.ADMIN_CONSOLE === 'true',
-        maxBackups: parseInt(process.env.MAX_BACKUPS || '5', 10),
-        compareMode: process.env.COMPARE_MODE || 'commit',
-        notifyChanges: process.env.NOTIFY_CHANGES !== 'false',
-        updateTimeout: parseInt(process.env.UPDATE_TIMEOUT || '300000', 10),
-        skipPaths: (process.env.SKIP_PATHS || 'node_modules,.git,backups,.env,logs,sqlite').split(','),
-        preUpdateCommand: process.env.PRE_UPDATE_COMMAND || null,
-        postUpdateCommand: process.env.POST_UPDATE_COMMAND || null,
-    };
-
-    try {
-        const configDir = dirname(configPath);
-        await fs.mkdir(configDir, { recursive: true });
-
-        try {
-            const fileContent = await fs.readFile(configPath, 'utf-8');
-            const fileConfig = JSON.parse(fileContent);
-            config = { ...config, ...fileConfig };
-
-            // Ghi lại config với các giá trị mới từ env
-            await fs.writeFile(configPath, JSON.stringify(config, null, 2));
-        } catch (error) {
-            // Tạo file config nếu chưa tồn tại
-            await fs.writeFile(configPath, JSON.stringify(config, null, 2));
-        }
-    } catch (error) {
-        defaultLogger.error('Failed to load/create auto-update config:', error);
-    }
-
-    const updater = new AutoUpdater({ ...config, logger: defaultLogger, bot: botInstance });
-    await updater.init();
-
-    // Chạy kiểm tra cập nhật ban đầu sau 30 giây
-    setTimeout(async () => {
-        try {
-            defaultLogger.info('Running initial update check...');
-            await updater.checkForUpdates();
-        } catch (error) {
-            defaultLogger.error('Initial update check failed:', error);
-        }
-    }, 30000);
-
-    return updater;
-}
+export default AutoUpdater;
